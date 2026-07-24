@@ -28,6 +28,7 @@ uniform float uNormalStrength;
 uniform float uSpecularF0;
 uniform float uIBLIntensity;
 uniform float uAlphaCutoff;
+uniform int uFlipNormals;  // 1 = source asset normals point inward, flip them
 
 // ---- BRDF variants ----
 uniform int uNDFType;
@@ -218,6 +219,7 @@ void main() {
     float ao = uHasAOMap == 1 ? texture(uAOMap, fs.uv).r * uAO : uAO;
 
     vec3 N = getNormal();
+    if (uFlipNormals == 1) N = -N;
     if (!gl_FrontFacing) N = -N;
     vec3 V = normalize(uCameraPos - fs.worldPos);
 

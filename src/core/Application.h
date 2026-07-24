@@ -19,12 +19,16 @@ public:
         screenshotFrame_ = frames;
     }
 
+    // Import a model once after init (for CLI smoke tests).
+    void requestImport(const std::string& path) { importOnStart_ = path; }
+
 private:
     void buildDefaultScene();
     void onFileDropped(const std::string& path);
     void saveScreenshot();
 
     std::string screenshotPath_;
+    std::string importOnStart_;
     int screenshotFrame_ = -1;
     int frameIndex_ = 0;
 

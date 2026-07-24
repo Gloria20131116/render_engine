@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 
+#include "material/ShaderCache.h"
 #include "render/Bloom.h"
 #include "render/FrameDebug.h"
 #include "render/Framebuffer.h"
@@ -13,6 +14,7 @@ class Scene;
 class ShaderLibrary;
 struct Material;
 class Shader;
+class Texture;
 
 enum class TonemapMode : int { ACES = 0, Reinhard = 1, None = 2 };
 
@@ -22,6 +24,8 @@ struct RendererSettings {
     bool drawGroundPlane = true;
     bool wireframe = false;
     int shadowMapSize = 2048;
+    int msaaSamples = 4;        // 1 = off; 2/4/8 = MSAA on the scene target
+    bool outlineEnabled = true; // global toggle for the outline pass
 };
 
 // Parameters for the RenderDoc-style texture inspector.
@@ -57,10 +61,23 @@ public:
 private:
     void shadowPass(Scene& scene);
     void mainPass(Scene& scene);
+    void outlinePass(Scene& scene);
     void skyboxPass(Scene& scene);
+    void resolveMsaa();
     void tonemapPass();
     void bindMaterial(Shader& sh, const Material& mat);
+    // Camera/sun/point-light/IBL/shadow uniforms shared by the unified pbr
+    // shader and every graph-generated shader. `iblBaseUnit` is the first
+    // texture unit for IBL+shadow maps (graph shaders keep 0..7 for graph
+    // textures, so they use a higher base).
+    void bindLighting(Shader& sh, Scene& scene, int iblBaseUnit);
+    void bindGraphMaterial(Shader& sh, const Material& mat);
     glm::mat4 sunLightMatrix(const Scene& scene) const;
+
+    // Scene passes render into the MSAA target when enabled, else sceneFbo_.
+    bool msaaActive() const { return settings.msaaSamples > 1; }
+    void bindSceneTarget();
+    void ensureMsaaTarget();
 
     ShaderLibrary* shaders_ = nullptr;
     FrameDebugger debugger_;
@@ -68,13 +85,21 @@ private:
     Bloom bloom_;
 
     Framebuffer shadowFbo_;   // depth only
-    Framebuffer sceneFbo_;    // RGBA16F + depth
+    Framebuffer sceneFbo_;    // RGBA16F + depth (resolve target when MSAA on)
     Framebuffer finalFbo_;    // RGBA8 (after tonemap)
     Framebuffer inspectFbo_;  // RGBA8 (texture inspector)
+
+    // Multisampled scene target (raw GL, resolved into sceneFbo_).
+    GLuint msaaFbo_ = 0, msaaColor_ = 0, msaaDepth_ = 0;
+    int msaaW_ = 0, msaaH_ = 0, msaaSamples_ = 0;
+
+    GraphShaderCache graphCache_;
+    std::shared_ptr<Texture> whiteTex_;  // fallback for unbound graph samplers
 
     glm::mat4 lightMatrix_{1.0f};
     glm::mat4 view_{1.0f}, proj_{1.0f};
     glm::vec3 cameraPos_{0.0f};
+    float time_ = 0.0f;
     int vpWidth_ = 1280, vpHeight_ = 720;
     int mainPassDrawCalls_ = 0;
 };

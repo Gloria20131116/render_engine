@@ -50,6 +50,23 @@ FetchContent_Declare(stb
     GIT_TAG master
     GIT_SHALLOW TRUE)
 
+# ---------------- nlohmann/json ----------------
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+set(JSON_Install OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+    GIT_SHALLOW TRUE)
+
+# ---------------- imnodes (node graph editor for ImGui) ----------------
+# SOURCE_SUBDIR points at a non-existent dir so its own CMakeLists (which
+# find_package's imgui) is skipped; we compile imnodes.cpp into our imgui lib.
+FetchContent_Declare(imnodes
+    GIT_REPOSITORY https://github.com/Nelarius/imnodes.git
+    GIT_TAG master
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR cmake_unused)
+
 # ---------------- Assimp ----------------
 set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
@@ -68,7 +85,7 @@ FetchContent_Declare(assimp
     GIT_TAG v6.0.2
     GIT_SHALLOW TRUE)
 
-FetchContent_MakeAvailable(glfw glew glm imgui stb assimp)
+FetchContent_MakeAvailable(glfw glew glm imgui stb nlohmann_json imnodes assimp)
 
 # ImGui static library (no upstream CMakeLists)
 add_library(imgui STATIC
@@ -77,10 +94,16 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
 target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
 target_link_libraries(imgui PUBLIC glfw)
+
+# imnodes compiles against the same ImGui
+target_sources(imgui PRIVATE ${imnodes_SOURCE_DIR}/imnodes.cpp)
+target_include_directories(imgui PUBLIC ${imnodes_SOURCE_DIR})
+target_compile_definitions(imgui PRIVATE IMGUI_DEFINE_MATH_OPERATORS)
 
 # ---------------- Engine ----------------
 file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS
@@ -96,6 +119,7 @@ target_link_libraries(render_engine PRIVATE
     libglew_static
     glm::glm
     imgui
+    nlohmann_json::nlohmann_json
     assimp)
 target_compile_definitions(render_engine PRIVATE
     GLEW_STATIC

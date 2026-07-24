@@ -41,6 +41,6 @@ public:
     }
 
     void zoom(float delta) {
-        distance = glm::clamp(distance * (1.0f - delta * 0.1f), 0.1f, 100.0f);
+        distance = glm::clamp(distance * (1.0f - delta * 0.1f), 0.05f, 1000.0f);
     }
 };

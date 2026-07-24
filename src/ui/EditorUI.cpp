@@ -7,8 +7,10 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <imnodes.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 
@@ -17,6 +19,8 @@
 #include "core/Paths.h"
 #include "core/Window.h"
 #include "import/ModelLoader.h"
+#include "material/MaterialAsset.h"
+#include "material/MaterialPreset.h"
 #include "render/ShaderLibrary.h"
 #include "render/Texture.h"
 #include "scene/Material.h"
@@ -24,22 +28,79 @@
 #include "scene/Scene.h"
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <commdlg.h>
 #endif
 
 static ImTextureID toImTex(GLuint tex) { return (ImTextureID)(intptr_t)tex; }
 
-static std::string openFileDialog(const char* filter) {
+static std::string wideToUtf8(const std::wstring& wide) {
 #ifdef _WIN32
-    char file[MAX_PATH] = {};
-    OPENFILENAMEA ofn = {};
+    if (wide.empty()) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.size(), nullptr, 0, nullptr,
+                                nullptr);
+    std::string out(n, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), (int)wide.size(), out.data(), n, nullptr, nullptr);
+    return out;
+#else
+    (void)wide;
+    return {};
+#endif
+}
+
+static std::wstring utf8ToWide(const std::string& utf8) {
+#ifdef _WIN32
+    if (utf8.empty()) return {};
+    int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), nullptr, 0);
+    std::wstring out(n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), out.data(), n);
+    return out;
+#else
+    (void)utf8;
+    return {};
+#endif
+}
+
+static std::string openFileDialog(const wchar_t* filter, const std::string& initialDir = {}) {
+#ifdef _WIN32
+    wchar_t file[MAX_PATH] = {};
+    OPENFILENAMEW ofn = {};
     ofn.lStructSize = sizeof(ofn);
     ofn.lpstrFilter = filter;
     ofn.lpstrFile = file;
     ofn.nMaxFile = MAX_PATH;
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
-    if (GetOpenFileNameA(&ofn)) return file;
+    std::wstring dir = utf8ToWide(initialDir);
+    if (!dir.empty()) ofn.lpstrInitialDir = dir.c_str();
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER;
+    if (GetOpenFileNameW(&ofn)) return wideToUtf8(file);
+#else
+    (void)filter;
+    (void)initialDir;
+#endif
+    return {};
+}
+
+static std::string saveFileDialog(const wchar_t* filter, const wchar_t* defaultExt,
+                                  const std::string& initialDir = {}) {
+#ifdef _WIN32
+    wchar_t file[MAX_PATH] = {};
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = filter;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = defaultExt;
+    std::wstring dir = utf8ToWide(initialDir);
+    if (!dir.empty()) ofn.lpstrInitialDir = dir.c_str();
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER;
+    if (GetSaveFileNameW(&ofn)) return wideToUtf8(file);
+#else
+    (void)filter;
+    (void)defaultExt;
+    (void)initialDir;
 #endif
     return {};
 }
@@ -60,8 +121,24 @@ void EditorUI::init(Window& window, Scene& scene, Renderer& renderer, ShaderLibr
 
     setupStyle();
 
+#ifdef _WIN32
+    // CJK-capable UI font so imported assets with Chinese/Japanese names
+    // (PMX/MMD models, OBJ material slots etc.) don't render as "?".
+    const char* cjkFonts[] = {"C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/msyh.ttf",
+                              "C:/Windows/Fonts/simhei.ttf"};
+    for (const char* f : cjkFonts) {
+        if (!std::filesystem::exists(f)) continue;
+        io.Fonts->AddFontFromFileTTF(f, 16.0f, nullptr,
+                                     io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+        break;
+    }
+#endif
+
     ImGui_ImplGlfw_InitForOpenGL(window.handle(), true);
     ImGui_ImplOpenGL3_Init("#version 450");
+
+    ImNodes::CreateContext();
+    ImNodes::GetIO().LinkDetachWithModifierClick.Modifier = &ImGui::GetIO().KeyCtrl;
 
     brdfPath_ = Paths::shader("brdf.glsl");
     brdfBuffer_.resize(64 * 1024, 0);
@@ -93,6 +170,7 @@ void EditorUI::setupStyle() {
 }
 
 void EditorUI::shutdown() {
+    ImNodes::DestroyContext();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -126,9 +204,11 @@ void EditorUI::buildDefaultLayout(unsigned dockspaceId) {
     ImGui::DockBuilderDockWindow("Lights", rightBottom);
     ImGui::DockBuilderDockWindow("Environment", rightBottom);
     ImGui::DockBuilderDockWindow("Post FX", rightBottom);
-    ImGui::DockBuilderDockWindow("Frame Debugger", bottom);
     ImGui::DockBuilderDockWindow("BRDF Editor", bottom);
+    ImGui::DockBuilderDockWindow("Frame Debugger", bottom);
     ImGui::DockBuilderDockWindow("Console", bottom);
+    // Docked last so it's the active tab (last one wins focus).
+    ImGui::DockBuilderDockWindow("Material Graph", bottom);
     ImGui::DockBuilderFinish(dockspaceId);
 }
 
@@ -154,8 +234,13 @@ void EditorUI::draw(float dt) {
     ImGuiID dockspaceId = ImGui::GetID("MainDockSpace");
     if (!layoutInitialized_) {
         layoutInitialized_ = true;
-        if (ImGui::DockBuilderGetNode(dockspaceId) == nullptr) buildDefaultLayout(dockspaceId);
+        if (ImGui::DockBuilderGetNode(dockspaceId) == nullptr) {
+            buildDefaultLayout(dockspaceId);
+            focusGraphFrames_ = 2;  // window must exist before it can be focused
+        }
     }
+    if (focusGraphFrames_ > 0 && --focusGraphFrames_ == 0)
+        ImGui::SetWindowFocus("Material Graph");
     ImGui::DockSpace(dockspaceId, ImVec2(0, 0), ImGuiDockNodeFlags_None);
     ImGui::End();
 
@@ -166,6 +251,7 @@ void EditorUI::draw(float dt) {
     drawEnvironment();
     drawPostProcessing();
     drawBRDFEditor();
+    nodeEditor_.draw(*scene_);
     drawFrameDebugger();
     drawConsole();
 }
@@ -333,7 +419,10 @@ static void textureSlot(const char* label, std::shared_ptr<Texture>& slot, bool 
     ImGui::Text("%s", label);
     ImGui::SameLine(ImGui::GetContentRegionAvail().x - 70);
     if (ImGui::SmallButton("Load")) {
-        std::string p = openFileDialog("Images\0*.png;*.jpg;*.jpeg;*.tga;*.bmp;*.dds\0All\0*.*\0");
+        static const wchar_t kImgFilter[] =
+            L"Images (*.png;*.jpg;*.jpeg;*.tga;*.bmp)\0*.png;*.jpg;*.jpeg;*.tga;*.bmp\0"
+            L"All Files (*.*)\0*.*\0\0";
+        std::string p = openFileDialog(kImgFilter);
         if (!p.empty()) {
             auto t = Texture::load2D(p, srgb);
             if (t) slot = t;
@@ -349,6 +438,50 @@ void EditorUI::drawMaterialEditor(Node& node) {
     if (!ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
     ImGui::Text("%s", m.name.c_str());
+    if (!m.assetPath.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%s)",
+                            std::filesystem::path(m.assetPath).filename().string().c_str());
+    }
+
+    // ---- Preset / asset row ----
+    {
+        int presetIdx = -1;
+        const auto& presetNames = MaterialPreset::names();
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
+        if (ImGui::BeginCombo("##preset", "Apply Preset...")) {
+            for (int i = 0; i < (int)presetNames.size(); ++i)
+                if (ImGui::Selectable(presetNames[i].c_str())) presetIdx = i;
+            ImGui::EndCombo();
+        }
+        if (presetIdx >= 0) {
+            // Keep textures the user already assigned; presets only set parameters.
+            Material preset = MaterialPreset::create(presetIdx);
+            preset.albedoMap = m.albedoMap;
+            preset.normalMap = m.normalMap;
+            preset.metallicMap = m.metallicMap;
+            preset.roughnessMap = m.roughnessMap;
+            preset.aoMap = m.aoMap;
+            preset.emissiveMap = m.emissiveMap;
+            preset.rampMap = m.rampMap;
+            preset.graph = m.graph;
+            m = preset;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Save .mat")) {
+            std::filesystem::create_directories(Paths::asset("materials"));
+            std::string p = saveFileDialog(L"Material (*.mat)\0*.mat\0All Files\0*.*\0", L"mat",
+                                           Paths::asset("materials"));
+            if (!p.empty() && MaterialAsset::save(m, p)) m.assetPath = p;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Load .mat")) {
+            std::string p = openFileDialog(L"Material (*.mat)\0*.mat\0All Files\0*.*\0",
+                                           Paths::asset("materials"));
+            if (!p.empty()) MaterialAsset::load(p, m);
+        }
+    }
+
     int model = (int)m.model;
     if (ImGui::Combo("Shading Model", &model, "PBR (Cook-Torrance)\0Toon (ZZZ/Endfield)\0"))
         m.model = (ShadingModel)model;
@@ -372,8 +505,14 @@ void EditorUI::drawMaterialEditor(Node& node) {
         ImGui::SliderFloat("Spec Intensity", &m.toonSpecIntensity, 0.0f, 3.0f);
         ImGui::Checkbox("Outline", &m.outline);
         if (m.outline) {
-            ImGui::SliderFloat("Outline Width", &m.outlineWidth, 0.0f, 0.01f, "%.4f");
-            ImGui::ColorEdit3("Outline Color", &m.outlineColor.x);
+            ImGui::SliderFloat("Outline Width (px)", &m.outlineWidthPx, 0.0f, 10.0f, "%.1f");
+            ImGui::SliderFloat("Max World Width", &m.outlineMaxWorldWidth, 0.001f, 0.2f, "%.3f");
+            ImGui::SliderFloat("Outline Z Offset", &m.outlineZOffset, 0.0f, 0.002f, "%.5f");
+            ImGui::Checkbox("Color From Base", &m.outlineFromBaseColor);
+            if (m.outlineFromBaseColor)
+                ImGui::SliderFloat("Darken", &m.outlineColorScale, 0.0f, 1.0f);
+            else
+                ImGui::ColorEdit3("Outline Color", &m.outlineColor.x);
         }
     }
     ImGui::SliderFloat("AO", &m.ao, 0.0f, 1.0f);
@@ -382,6 +521,8 @@ void EditorUI::drawMaterialEditor(Node& node) {
     ImGui::SliderFloat("Normal Strength", &m.normalStrength, 0.0f, 3.0f);
     ImGui::SliderFloat("Alpha Cutoff", &m.alphaCutoff, 0.0f, 1.0f);
     ImGui::Checkbox("Double Sided", &m.doubleSided);
+    ImGui::SameLine();
+    ImGui::Checkbox("Flip Normals", &m.flipNormals);
 
     if (ImGui::TreeNodeEx("Textures", ImGuiTreeNodeFlags_DefaultOpen)) {
         textureSlot("Albedo", m.albedoMap, true);
@@ -491,7 +632,15 @@ void EditorUI::drawPostProcessing() {
     ImGui::SliderFloat("Intensity", &b.intensity, 0.0f, 0.5f);
     ImGui::SliderFloat("Radius", &b.radius, 0.25f, 3.0f);
 
+    ImGui::SeparatorText("Anti-Aliasing");
+    int msaaIdx = rs.msaaSamples >= 8 ? 3 : rs.msaaSamples >= 4 ? 2 : rs.msaaSamples >= 2 ? 1 : 0;
+    if (ImGui::Combo("MSAA", &msaaIdx, "Off\0002x\0004x\0008x\000")) {
+        static const int kSamples[] = {1, 2, 4, 8};
+        rs.msaaSamples = kSamples[msaaIdx];
+    }
+
     ImGui::SeparatorText("Debug");
+    ImGui::Checkbox("Outline Pass", &rs.outlineEnabled);
     ImGui::Checkbox("Wireframe", &rs.wireframe);
     ImGui::End();
 }
@@ -692,21 +841,83 @@ void EditorUI::drawConsole() {
 
 // ------------------------------------------------------------------- misc
 void EditorUI::importModelDialog() {
-    std::string p = openFileDialog(
-        "Models\0*.fbx;*.obj;*.gltf;*.glb;*.dae;*.pmx\0All\0*.*\0");
+    // Wide filter: pairs of "label\0pattern\0", terminated by extra \0.
+    // Must be a real array — a narrow "a\0b" string literal is easy to misuse.
+    static const wchar_t kFilter[] =
+        L"3D Models (*.obj;*.fbx;*.gltf;*.glb;*.dae;*.pmx)\0*.obj;*.fbx;*.gltf;*.glb;*.dae;*.pmx\0"
+        L"OBJ (*.obj)\0*.obj\0"
+        L"FBX (*.fbx)\0*.fbx\0"
+        L"All Files (*.*)\0*.*\0\0";
+    std::string p = openFileDialog(kFilter);
     if (!p.empty()) importModel(p);
 }
 
 void EditorUI::importModel(const std::string& path) {
     auto node = ModelLoader::load(path);
-    if (node) {
-        scene_->root->addChild(node);
-        scene_->selected = node;
+    if (!node) {
+        Log::error("Import failed (see log): %s", path.c_str());
+        return;
+    }
+    scene_->root->addChild(node);
+    scene_->selected = node;
+
+    // Frame the camera on the imported root using exact mesh AABBs transformed to world.
+    glm::vec3 bmin(0.0f), bmax(0.0f);
+    bool any = false;
+    std::function<void(const Node&, const glm::mat4&)> walk;
+    walk = [&](const Node& n, const glm::mat4& parent) {
+        glm::mat4 world = parent * n.localMatrix();
+        if (n.mesh && n.mesh->indexCount() > 0) {
+            const glm::vec3& mn = n.mesh->boundsMin();
+            const glm::vec3& mx = n.mesh->boundsMax();
+            for (int corner = 0; corner < 8; ++corner) {
+                glm::vec3 c((corner & 1) ? mx.x : mn.x, (corner & 2) ? mx.y : mn.y,
+                            (corner & 4) ? mx.z : mn.z);
+                glm::vec3 p = glm::vec3(world * glm::vec4(c, 1.0f));
+                if (!any) {
+                    bmin = bmax = p;
+                    any = true;
+                } else {
+                    bmin = glm::min(bmin, p);
+                    bmax = glm::max(bmax, p);
+                }
+            }
+        }
+        for (const auto& c : n.children) walk(*c, world);
+    };
+    walk(*node, glm::mat4(1.0f));
+    if (any) {
+        glm::vec3 center = 0.5f * (bmin + bmax);
+        float radius = glm::length(bmax - bmin) * 0.5f;
+
+        // Auto-normalize wildly out-of-scale imports (mm/cm exports etc.) to
+        // a lookdev-friendly size, and rest the model on the ground plane.
+        const glm::vec3 nodePos = node->position;
+        if (radius > 10.0f || (radius > 0.0f && radius < 0.05f)) {
+            float k = 1.5f / radius;
+            node->scale *= k;
+            bmin = nodePos + (bmin - nodePos) * k;
+            bmax = nodePos + (bmax - nodePos) * k;
+            center = 0.5f * (bmin + bmax);
+            radius = 1.5f;
+            Log::info("Auto-scaled import by %g to fit the scene (edit Scale to undo)", k);
+        }
+        float lift = -bmin.y;
+        node->position.y += lift;
+        center.y += lift;
+
+        if (radius < 0.1f) radius = 1.0f;
+        scene_->camera.target = center;
+        scene_->camera.distance = glm::clamp(radius * 2.2f, 0.5f, 500.0f);
+        scene_->camera.farZ = std::max(scene_->camera.farZ, radius * 20.0f);
+        Log::info("Framed camera on import (center=(%.2f,%.2f,%.2f) radius=%.2f)", center.x,
+                  center.y, center.z, radius);
     }
 }
 
 void EditorUI::loadHdrDialog() {
-    std::string p = openFileDialog("HDR\0*.hdr\0All\0*.*\0");
+    static const wchar_t kFilter[] = L"HDR Environment (*.hdr)\0*.hdr\0All Files (*.*)\0*.*\0\0";
+    std::string p = openFileDialog(kFilter);
     if (!p.empty()) {
         scene_->environment.hdrPath = p;
         scene_->environment.dirty = true;

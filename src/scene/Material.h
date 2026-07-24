@@ -17,6 +17,7 @@ enum class FresnelType : int { Schlick = 0, SchlickRoughness = 1, None = 2 };
 
 struct Material {
     std::string name = "Material";
+    std::string assetPath;  // .mat file path (empty = unsaved)
     ShadingModel model = ShadingModel::PBR;
 
     // ---- Common surface parameters ----
@@ -50,10 +51,14 @@ struct Material {
     float toonSpecIntensity = 0.6f;
     glm::vec3 toonSpecColor{1.0f};
 
-    // ---- Outline (inverted hull, used by Toon materials) ----
+    // ---- Outline (ZZZ-style inverted hull, used by Toon materials) ----
     bool outline = false;
-    float outlineWidth = 0.004f;    // approx. half-width in NDC (constant screen size)
+    float outlineWidthPx = 3.0f;       // constant width in screen pixels
+    float outlineMaxWorldWidth = 0.03f;  // clamp extrusion in world units (close-ups)
+    float outlineZOffset = 0.0002f;    // depth push to avoid z-fighting
     glm::vec3 outlineColor{0.05f, 0.03f, 0.06f};
+    bool outlineFromBaseColor = true;  // derive color from darkened base color
+    float outlineColorScale = 0.25f;   // multiplier when deriving from base
 
     // ---- Texture slots (null = use scalar parameters) ----
     std::shared_ptr<Texture> albedoMap;
@@ -65,4 +70,10 @@ struct Material {
     std::shared_ptr<Texture> rampMap;  // toon shading ramp (optional)
 
     bool doubleSided = false;
+    bool flipNormals = false;  // for assets whose source normals point inward
+
+    // Optional node graph (UE-style material editor). When set, the renderer
+    // uses the graph-generated shader instead of the unified pbr shader for
+    // surface parameters; lighting model is still selected by `model`.
+    std::shared_ptr<class MaterialGraph> graph;
 };

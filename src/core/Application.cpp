@@ -12,6 +12,7 @@
 #include "core/Events.h"
 #include "core/Log.h"
 #include "core/Paths.h"
+#include "material/MaterialGraph.h"
 #include "scene/Material.h"
 #include "scene/Mesh.h"
 
@@ -28,6 +29,11 @@ bool Application::init() {
 
     bus_.subscribe<FileDroppedEvent>(
         [this](const FileDroppedEvent& e) { onFileDropped(e.path); });
+
+    if (!importOnStart_.empty()) {
+        Log::info("CLI import: %s", importOnStart_.c_str());
+        ui_.importModel(importOnStart_);
+    }
 
     return true;
 }
@@ -73,6 +79,65 @@ void Application::buildDefaultScene() {
     toonMat->outline = true;
     toon->material = toonMat;
 
+    // Graph material demo sphere: Fresnel-driven two-color lerp on Base Color,
+    // Voronoi noise on Roughness. Open the "Material Graph" panel to edit it.
+    auto graphDemo = scene_.root->addChild("Graph Demo");
+    graphDemo->position = {2.2f, 1.0f, 1.2f};
+    graphDemo->mesh = Mesh::sphere(0.6f, 64, 48);
+    auto graphMat = std::make_shared<Material>();
+    graphMat->name = "Graph Preview";
+    graphMat->graph = std::make_shared<MaterialGraph>();
+    {
+        // NOTE: addNode() may reallocate the node vector, so grab pin ids
+        // right away instead of holding GraphNode references across calls.
+        MaterialGraph& g = *graphMat->graph;
+        int colAOut, colBOut, fresOut, lerpOut, noiseOut;
+        int lerpInA, lerpInB, lerpInT;
+        {
+            GraphNode& n = g.addNode("Color", {-60.0f, 20.0f});
+            n.value = {0.85f, 0.15f, 0.35f, 1.0f};
+            colAOut = n.outputs[0].id;
+        }
+        {
+            GraphNode& n = g.addNode("Color", {-60.0f, 140.0f});
+            n.value = {0.15f, 0.5f, 0.95f, 1.0f};
+            colBOut = n.outputs[0].id;
+        }
+        {
+            GraphNode& n = g.addNode("Fresnel", {-60.0f, 260.0f});
+            fresOut = n.outputs[0].id;
+        }
+        {
+            GraphNode& n = g.addNode("Lerp", {180.0f, 80.0f});
+            lerpInA = n.inputs[0].id;
+            lerpInB = n.inputs[1].id;
+            lerpInT = n.inputs[2].id;
+            lerpOut = n.outputs[0].id;
+        }
+        {
+            GraphNode& n = g.addNode("VoronoiNoise", {180.0f, 280.0f});
+            noiseOut = n.outputs[0].id;
+        }
+        int customOut, customInA;
+        {
+            // UE-style Custom node demo: time-pulsed emissive glow.
+            GraphNode& n = g.addNode("Custom", {180.0f, 420.0f});
+            n.customCode = "// Pulsing glow (HLSL aliases work: lerp/saturate/float3)\n"
+                           "return a * (0.3 + 0.3 * sin(uTime * 2.0));";
+            customInA = n.inputs[0].id;
+            customOut = n.outputs[0].id;
+        }
+        GraphNode* out = g.outputNode();
+        g.addLink(colAOut, lerpInA);
+        g.addLink(colBOut, lerpInB);
+        g.addLink(fresOut, lerpInT);
+        g.addLink(colBOut, customInA);
+        g.addLink(lerpOut, out->inputs[0].id);    // Base Color
+        g.addLink(noiseOut, out->inputs[2].id);   // Roughness
+        g.addLink(customOut, out->inputs[4].id);  // Emissive
+    }
+    graphDemo->material = graphMat;
+
     // One warm fill light as an example (up to 5 supported)
     scene_.addPointLight();
     scene_.pointLights[0].name = "Warm Fill";
@@ -82,7 +147,7 @@ void Application::buildDefaultScene() {
 
     scene_.camera.target = {0.0f, 1.0f, 0.0f};
     scene_.camera.distance = 6.0f;
-    scene_.selected = toon;
+    scene_.selected = graphDemo;  // opens the Material Graph demo in the editor
 }
 
 void Application::onFileDropped(const std::string& path) {

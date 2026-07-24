@@ -1,6 +1,26 @@
 #include "scene/Mesh.h"
 
+#include <cmath>
 #include <glm/gtc/constants.hpp>
+#include <unordered_map>
+
+// Average normals of vertices sharing a (quantized) position. Hard edges and
+// UV seams duplicate vertices with different normals; without this the
+// outline hull tears apart at every seam.
+static void computeSmoothNormals(std::vector<Vertex>& verts) {
+    std::unordered_map<uint64_t, glm::vec3> accum;
+    accum.reserve(verts.size());
+    auto key = [](const glm::vec3& p) -> uint64_t {
+        auto q = [](float v) -> uint64_t { return (uint64_t)((int64_t)llroundf(v * 1000.0f) & 0x1FFFFF); };
+        return (q(p.x) << 42) | (q(p.y) << 21) | q(p.z);
+    };
+    for (const Vertex& v : verts) accum[key(v.position)] += v.normal;
+    for (Vertex& v : verts) {
+        glm::vec3 n = accum[key(v.position)];
+        float len = glm::length(n);
+        v.smoothNormal = len > 1e-6f ? n / len : v.normal;
+    }
+}
 
 Mesh::Mesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices,
            std::string name)
@@ -8,14 +28,24 @@ Mesh::Mesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& ind
     vertexCount_ = (uint32_t)vertices.size();
     indexCount_ = (uint32_t)indices.size();
 
+    std::vector<Vertex> verts = vertices;
+    computeSmoothNormals(verts);
+
+    if (!verts.empty()) {
+        boundsMin_ = boundsMax_ = verts[0].position;
+        for (const Vertex& v : verts) {
+            boundsMin_ = glm::min(boundsMin_, v.position);
+            boundsMax_ = glm::max(boundsMax_, v.position);
+        }
+    }
+
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
     glGenBuffers(1, &ebo_);
 
     glBindVertexArray(vao_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(),
-                 GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(Vertex), verts.data(), GL_STATIC_DRAW);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(uint32_t), indices.data(),
                  GL_STATIC_DRAW);
@@ -31,6 +61,9 @@ Mesh::Mesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& ind
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                           (void*)offsetof(Vertex, tangent));
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          (void*)offsetof(Vertex, smoothNormal));
     glBindVertexArray(0);
 }
 

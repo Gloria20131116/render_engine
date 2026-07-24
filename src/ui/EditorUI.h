@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "render/Renderer.h"
+#include "ui/NodeEditor.h"
 
 class Scene;
 class ShaderLibrary;
@@ -59,6 +60,7 @@ private:
     int vpDesiredW_ = 1280, vpDesiredH_ = 720;
     float dt_ = 0.0f;
     bool layoutInitialized_ = false;
+    int focusGraphFrames_ = 0;  // select the Material Graph tab after layout build
 
     // Frame debugger selection
     bool hasSelection_ = false;
@@ -70,4 +72,7 @@ private:
     std::string brdfPath_;
     std::vector<char> brdfBuffer_;
     bool brdfLoaded_ = false;
+
+    // Material graph editor
+    NodeEditor nodeEditor_;
 };

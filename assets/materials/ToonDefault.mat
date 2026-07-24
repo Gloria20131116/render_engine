@@ -1,0 +1,22 @@
+{
+    "name": "Toon Default (ZZZ)",
+    "model": "Toon",
+    "baseColor": [0.93, 0.82, 0.78],
+    "metallic": 0.0,
+    "roughness": 0.5,
+    "ao": 1.0,
+    "shadowColor": [0.62, 0.54, 0.72],
+    "shadowThreshold": 0.5,
+    "shadowSoftness": 0.05,
+    "rimColor": [1.0, 1.0, 1.0],
+    "rimWidth": 0.6,
+    "rimIntensity": 0.5,
+    "toonSpecSize": 0.1,
+    "toonSpecIntensity": 0.6,
+    "toonSpecColor": [1.0, 1.0, 1.0],
+    "outline": true,
+    "outlineWidthPx": 3.0,
+    "outlineFromBaseColor": true,
+    "outlineColorScale": 0.25,
+    "doubleSided": false
+}
