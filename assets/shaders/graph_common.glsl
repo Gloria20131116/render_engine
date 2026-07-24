@@ -33,6 +33,7 @@ uniform int uFlipNormals;
 uniform float uTime;
 uniform vec2 uViewportSize;
 uniform float uSpecularF0;  // dielectric F0 from the material
+uniform float uOpacity;     // overall alpha multiplier (Transparent blend mode)
 
 // ---- Lights (identical names/layout to pbr.frag) ----
 uniform vec3 uSunDirection;

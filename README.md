@@ -15,6 +15,7 @@
 | 可编辑 BRDF | ① UI 内直接切换 D/G/F 各项变体（GGX/Beckmann/Blinn-Phong、Smith 高度相关/Schlick-GGX/Implicit、Schlick/粗糙度 Schlick/无）；② 在 **BRDF Editor** 面板直接编辑 `assets/shaders/brdf.glsl` 源码，保存即热重载 |
 | UE 式材质编辑 | **Material Graph** 面板：拖拽节点连线（右键添加节点），实时生成 GLSL 并编译；约 40 种节点：常量/数学/向量/纹理采样/UV（Tiling/Rotate/Panner）/工具（Fresnel/噪声/时间）/Toon（Ramp、SDF 面部阴影、Kajiya-Kay 各向异性发丝高光、风格化高光、边缘光、Matcap、次表面近似）；**Custom 代码节点**（UE Custom HLSL 式，节点内写函数体，内置 float2/3/4、lerp、saturate、frac、mul 等 HLSL 别名，可用 gN/gV/gUV/uTime 全局量，Apply 即重编译）；生成的 shader 落盘到 `assets/shaders/generated/` 可检视，参与热重载 |
 | 材质资产 | 内置 11 种预设（PBR/金属/玻璃/皮肤/布料/自发光/Toon 皮肤·头发·布料等），Inspector 一键套用；材质（含节点图）可保存/加载为 JSON `.mat` 文件（`assets/materials/`） |
+| 混合与深度 | 每材质 Blend Mode：Opaque / Masked（alpha 裁剪）/ Transparent（真混合，独立 Pass、按相机距离从后往前排序、不写深度不投影）；Depth & Sorting 自定义：Sort Priority 绘制顺序、Depth Test 开关（X-Ray 置顶）、Depth Write 覆盖、Depth Bias 多边形偏移（贴花/去 z-fighting） |
 | NPR 卡通渲染 | 半兰伯特 ramp 双色调（支持 ramp 贴图）、风格化高光、边缘光；绝区零式反向壳描边独立 Pass（平滑法线外扩、像素级恒定宽度 + 世界空间钳制、深度偏移、可从底色/贴图派生描边色） |
 | 光照 | 1 个太阳光（方位角/仰角、颜色、强度、PCF 阴影）+ 最多 5 个点光（位置、颜色、强度、半径） |
 | IBL 环境 | 拖入 `.hdr` 全景图或使用内置程序化天空；可旋转、调强度、背景模糊 |
@@ -44,6 +45,35 @@ build\render_engine.exe
 - **改 BRDF**：BRDF Editor 面板改代码按 `Save && Recompile`，或用任意编辑器改 `assets/shaders/*.glsl`，保存立即生效
 - **节点图材质**：选中节点 → Material Graph 面板 `Create Material Graph` → 右键画布添加节点 → 连线到 Material Output（连线即时重编译，出错红字提示且保留上一个可用 shader）；默认场景的 "Graph Demo" 球即示例图；Ctrl+点击可拔线，Delete 删除选中节点/连线
 - **材质预设与保存**：Inspector 材质区顶部 `Apply Preset...` 套用预设（保留已绑贴图）；`Save .mat` / `Load .mat` 序列化整个材质（含节点图与贴图相对路径）
+
+### 半透明 / Mask / 深度排序
+
+材质面板 `Shading Model` 下方的 **Blend Mode** 决定合成方式：
+
+| 模式 | 行为 | 典型用途 |
+| --- | --- | --- |
+| Opaque | 默认；写深度、不混合 | 大部分表面 |
+| Masked (Alpha Test) | 按 **Alpha Cutoff** 对 albedo 贴图 alpha 通道做硬裁剪；照常写深度、投影 | 发片、植被、蕾丝、镂空布料 |
+| Transparent (Blend) | **Opacity** × albedo alpha 做 alpha 混合；走独立 Transparent Pass（天空盒之后），自动按相机距离从后往前排序，不写深度、不投影、不画描边 | 玻璃、纱裙、特效 |
+
+快速上手：选中物体 → Material 面板把 Blend Mode 切到 Transparent → 拖 Opacity；或直接套 `Glass (Approx)` 预设。节点图材质同样生效（图的 Alpha 引脚输出会再乘 Opacity）。
+
+**自定义排序与深度**（Material 面板 → 展开 `Depth & Sorting`）：
+
+| 控制 | 作用 | 什么时候用 |
+| --- | --- | --- |
+| Sort Priority | 整数（-100~100，默认 0），**越大越后画**（画在上面）。不透明按它稳定排序；透明先按它分组，组内再自动按距离从后往前 | 透明物体互相穿插排错（把该盖在上面的调大）；多层特效固定叠加顺序 |
+| Depth Test | 关闭后无视场景深度、永远画在最上层 | X-Ray 透视武器、选中高亮（建议同时把 Priority 调大保证最后画） |
+| Depth Write | Auto（跟随混合模式：不透明写、透明不写）/ Force On / Force Off | 半透明头发 Force On 可正确自遮挡；单个透明网格自身前后穿插出错时优先用它而不是调 Priority |
+| Depth Bias | 多边形偏移，负值向相机拉近、正值推远 | 贴花贴墙（负值如 -1）、共面网格闪烁 |
+
+具体操作：
+
+1. 节点树里选中对象（多 material 插槽的模型选对应子节点，每个插槽可独立设置）
+2. Material 面板展开 `Depth & Sorting`，拖动或双击输入数值
+3. 调好后点 `Save .mat` 持久化（`blendMode` / `opacity` / `sortPriority` / `depthTest` / `depthWrite` / `depthBias` 字段），下次 `Load .mat` 恢复
+
+注意：排序粒度是物体级（按节点原点到相机的距离），单个网格内部的三角形不排序；透明 Pass 在 Frame Debugger 里以 "Transparent" Pass 显示，可逐帧检查绘制顺序与输出。
 
 ## 目录结构
 

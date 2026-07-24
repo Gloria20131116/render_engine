@@ -27,7 +27,8 @@ uniform vec3 uEmissive;
 uniform float uNormalStrength;
 uniform float uSpecularF0;
 uniform float uIBLIntensity;
-uniform float uAlphaCutoff;
+uniform float uAlphaCutoff;  // >0 = alpha test (Masked blend mode)
+uniform float uOpacity;      // overall alpha multiplier (Transparent blend mode)
 uniform int uFlipNormals;  // 1 = source asset normals point inward, flip them
 
 // ---- BRDF variants ----
@@ -230,5 +231,8 @@ void main() {
                                          : uEmissive;
     color += emissive;
 
-    FragColor = vec4(color, 1.0);
+    // Alpha only matters in the blended transparent pass; the opaque pass
+    // renders with blending disabled and ignores it.
+    float alpha = clamp(uOpacity * albedoTex.a, 0.0, 1.0);
+    FragColor = vec4(color, alpha);
 }

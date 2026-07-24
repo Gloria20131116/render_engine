@@ -11,6 +11,7 @@
 #include "render/IBL.h"
 
 class Scene;
+class Node;
 class ShaderLibrary;
 struct Material;
 class Shader;
@@ -61,11 +62,20 @@ public:
 private:
     void shadowPass(Scene& scene);
     void mainPass(Scene& scene);
+    // Blended materials, drawn after the skybox sorted back-to-front with
+    // depth test on but depth writes off.
+    void transparentPass(Scene& scene);
     void outlinePass(Scene& scene);
     void skyboxPass(Scene& scene);
     void resolveMsaa();
     void tonemapPass();
     void bindMaterial(Shader& sh, const Material& mat);
+    // Draws one node, dispatching to its graph-generated shader when it has a
+    // material graph, else to the unified `pbr` shader (`sh`, already bound).
+    // Applies the material's custom depth state (test/write/bias); the default
+    // depth-write behaviour depends on which pass is drawing.
+    void drawWithMaterial(Shader& sh, Scene& scene, Node& node, const glm::mat4& world,
+                          PassRecord& rec, bool inTransparentPass);
     // Camera/sun/point-light/IBL/shadow uniforms shared by the unified pbr
     // shader and every graph-generated shader. `iblBaseUnit` is the first
     // texture unit for IBL+shadow maps (graph shaders keep 0..7 for graph

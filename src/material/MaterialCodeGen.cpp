@@ -217,7 +217,7 @@ std::string MaterialCodeGen::generate(const MaterialGraph& graph, std::string& o
         : evaluatePBR(sBaseColor.xyz, clamp(sMetallic.x, 0.0, 1.0),
                       clamp(sRoughness.x, 0.02, 1.0), clamp(sAO.x, 0.0, 1.0), N, gV);
     color += sEmissive.xyz;
-    FragColor = vec4(color, clamp(sAlpha.x, 0.0, 1.0));
+    FragColor = vec4(color, clamp(sAlpha.x * uOpacity, 0.0, 1.0));
 }
 )GLSL";
 

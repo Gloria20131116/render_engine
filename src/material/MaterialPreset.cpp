@@ -52,6 +52,8 @@ const std::vector<PresetEntry>& registry() {
              m.specularF0 = 0.08f;  // higher IOR than default dielectric
              m.iblIntensity = 1.5f;
              m.doubleSided = true;
+             m.blend = BlendMode::Transparent;
+             m.opacity = 0.35f;
              return m;
          }},
         {"Skin (SSS Approx)",

@@ -15,6 +15,17 @@ enum class NDFType : int { GGX = 0, Beckmann = 1, BlinnPhong = 2 };
 enum class GeomType : int { SmithGGX = 0, SmithSchlickGGX = 1, Implicit = 2 };
 enum class FresnelType : int { Schlick = 0, SchlickRoughness = 1, None = 2 };
 
+// How the material is composited into the scene.
+enum class BlendMode : int {
+    Opaque = 0,       // depth-tested, depth-written, no blending
+    Masked = 1,       // alpha test: discard below alphaCutoff (hard edges, casts shadows)
+    Transparent = 2,  // alpha blend: sorted back-to-front pass, no depth write / shadows
+};
+
+// Per-material depth-write override. Auto follows the blend mode:
+// on for Opaque/Masked, off for Transparent.
+enum class DepthWriteMode : int { Auto = 0, On = 1, Off = 2 };
+
 struct Material {
     std::string name = "Material";
     std::string assetPath;  // .mat file path (empty = unsaved)
@@ -30,7 +41,18 @@ struct Material {
     float normalStrength = 1.0f;
     float specularF0 = 0.04f;  // dielectric reflectance at normal incidence
     float iblIntensity = 1.0f;
-    float alphaCutoff = 0.0f;  // 0 = opaque, >0 = alpha test against albedo alpha
+
+    // ---- Blending / transparency ----
+    BlendMode blend = BlendMode::Opaque;
+    float alphaCutoff = 0.5f;  // Masked: discard when albedo alpha < cutoff
+    float opacity = 1.0f;      // Transparent: overall alpha multiplier
+
+    // ---- Depth / sorting control ----
+    int sortPriority = 0;      // higher draws later (on top); transparent sorts by
+                               // (priority, then back-to-front distance)
+    bool depthTest = true;     // off = always draw on top (overlays, x-ray weapons)
+    DepthWriteMode depthWrite = DepthWriteMode::Auto;
+    float depthBias = 0.0f;    // polygon offset; negative pulls toward camera (decals)
 
     // ---- BRDF variant selection (feeds brdf.glsl) ----
     NDFType ndf = NDFType::GGX;

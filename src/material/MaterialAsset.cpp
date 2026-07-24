@@ -37,6 +37,36 @@ static ShadingModel parseShadingModel(const std::string& s) {
     return ShadingModel::PBR;
 }
 
+static const char* blendModeStr(BlendMode b) {
+    switch (b) {
+        case BlendMode::Opaque:      return "Opaque";
+        case BlendMode::Masked:      return "Masked";
+        case BlendMode::Transparent: return "Transparent";
+    }
+    return "Opaque";
+}
+
+static BlendMode parseBlendMode(const std::string& s) {
+    if (s == "Masked") return BlendMode::Masked;
+    if (s == "Transparent") return BlendMode::Transparent;
+    return BlendMode::Opaque;
+}
+
+static const char* depthWriteStr(DepthWriteMode m) {
+    switch (m) {
+        case DepthWriteMode::Auto: return "Auto";
+        case DepthWriteMode::On:   return "On";
+        case DepthWriteMode::Off:  return "Off";
+    }
+    return "Auto";
+}
+
+static DepthWriteMode parseDepthWrite(const std::string& s) {
+    if (s == "On") return DepthWriteMode::On;
+    if (s == "Off") return DepthWriteMode::Off;
+    return DepthWriteMode::Auto;
+}
+
 static const char* ndfStr(NDFType t) {
     switch (t) {
         case NDFType::GGX:       return "GGX";
@@ -128,7 +158,17 @@ bool MaterialAsset::save(const Material& mat, const std::string& path) {
     j["normalStrength"]    = mat.normalStrength;
     j["specularF0"]        = mat.specularF0;
     j["iblIntensity"]      = mat.iblIntensity;
-    j["alphaCutoff"]       = mat.alphaCutoff;
+
+    // Blending
+    j["blendMode"]   = blendModeStr(mat.blend);
+    j["alphaCutoff"] = mat.alphaCutoff;
+    j["opacity"]     = mat.opacity;
+
+    // Depth / sorting
+    j["sortPriority"] = mat.sortPriority;
+    j["depthTest"]    = mat.depthTest;
+    j["depthWrite"]   = depthWriteStr(mat.depthWrite);
+    j["depthBias"]    = mat.depthBias;
 
     // BRDF
     j["ndf"]                = ndfStr(mat.ndf);
@@ -225,7 +265,21 @@ bool MaterialAsset::load(const std::string& path, Material& outMat) {
     flt("normalStrength",    outMat.normalStrength);
     flt("specularF0",        outMat.specularF0);
     flt("iblIntensity",      outMat.iblIntensity);
-    flt("alphaCutoff",       outMat.alphaCutoff);
+
+    // Blending
+    if (j.contains("blendMode") && j["blendMode"].is_string())
+        outMat.blend = parseBlendMode(j["blendMode"].get<std::string>());
+    flt("alphaCutoff", outMat.alphaCutoff);
+    flt("opacity",     outMat.opacity);
+
+    // Depth / sorting
+    if (j.contains("sortPriority") && j["sortPriority"].is_number())
+        outMat.sortPriority = j["sortPriority"].get<int>();
+    if (j.contains("depthTest") && j["depthTest"].is_boolean())
+        outMat.depthTest = j["depthTest"].get<bool>();
+    if (j.contains("depthWrite") && j["depthWrite"].is_string())
+        outMat.depthWrite = parseDepthWrite(j["depthWrite"].get<std::string>());
+    flt("depthBias", outMat.depthBias);
 
     // BRDF
     if (j.contains("ndf")     && j["ndf"].is_string())     outMat.ndf     = parseNDF(j["ndf"].get<std::string>());

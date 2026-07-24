@@ -102,6 +102,7 @@ void Renderer::render(Scene& scene) {
     mainPass(scene);
     outlinePass(scene);
     skyboxPass(scene);
+    transparentPass(scene);  // after skybox so blending sees the background
     resolveMsaa();
     bloom_.render(sceneFbo_.colorTex(), debugger_);
     tonemapPass();
@@ -189,6 +190,8 @@ void Renderer::shadowPass(Scene& scene) {
         glEnable(GL_CULL_FACE);
         scene.root->traverse([&](Node& node, const glm::mat4& world) {
             if (!node.mesh) return;
+            // Transparent surfaces don't cast shadows (common approximation).
+            if (node.material && node.material->blend == BlendMode::Transparent) return;
             setFrontFaceFor(world);
             sh->setMat4("uModel", world);
             node.mesh->draw();
@@ -266,7 +269,8 @@ void Renderer::bindMaterial(Shader& sh, const Material& mat) {
     sh.setFloat("uNormalStrength", mat.normalStrength);
     sh.setFloat("uSpecularF0", mat.specularF0);
     sh.setFloat("uIBLIntensity", mat.iblIntensity);
-    sh.setFloat("uAlphaCutoff", mat.alphaCutoff);
+    sh.setFloat("uAlphaCutoff", mat.blend == BlendMode::Masked ? mat.alphaCutoff : 0.0f);
+    sh.setFloat("uOpacity", mat.blend == BlendMode::Transparent ? mat.opacity : 1.0f);
     sh.setInt("uFlipNormals", mat.flipNormals ? 1 : 0);
 
     sh.setInt("uNDFType", (int)mat.ndf);
@@ -304,6 +308,55 @@ void Renderer::bindMaterial(Shader& sh, const Material& mat) {
     else glEnable(GL_CULL_FACE);
 }
 
+void Renderer::drawWithMaterial(Shader& sh, Scene& scene, Node& node, const glm::mat4& world,
+                                PassRecord& rec, bool inTransparentPass) {
+    Material& mat = *node.material;
+
+    // ---- Node-graph material path (UE-style material editor) ----
+    // Per-material depth overrides. Default write behaviour follows the pass
+    // (on for opaque/masked, off for the blended transparent pass).
+    if (mat.depthTest) glEnable(GL_DEPTH_TEST);
+    else glDisable(GL_DEPTH_TEST);
+    bool depthWrite = inTransparentPass ? false : true;
+    if (mat.depthWrite == DepthWriteMode::On) depthWrite = true;
+    else if (mat.depthWrite == DepthWriteMode::Off) depthWrite = false;
+    glDepthMask(depthWrite ? GL_TRUE : GL_FALSE);
+    if (mat.depthBias != 0.0f) {
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(mat.depthBias, mat.depthBias);
+    } else {
+        glDisable(GL_POLYGON_OFFSET_FILL);
+    }
+
+    if (mat.graph) {
+        auto gsh = graphCache_.ensure(*mat.graph);
+        if (gsh && gsh->valid()) {
+            gsh->bind();
+            bindLighting(*gsh, scene, 8);  // graph samplers use 0..7
+            gsh->setMat4("uModel", world);
+            gsh->setInt("uShadingModel", (int)mat.model);
+            gsh->setInt("uFlipNormals", mat.flipNormals ? 1 : 0);
+            gsh->setFloat("uSpecularF0", mat.specularF0);
+            gsh->setFloat("uIBLIntensity", mat.iblIntensity);
+            gsh->setFloat("uOpacity", mat.blend == BlendMode::Transparent ? mat.opacity : 1.0f);
+            gsh->setFloat("uTime", time_);
+            gsh->setVec2("uViewportSize", {(float)vpWidth_, (float)vpHeight_});
+            bindGraphMaterial(*gsh, mat);
+            if (mat.doubleSided) glDisable(GL_CULL_FACE);
+            else glEnable(GL_CULL_FACE);
+            node.mesh->draw();
+            rec.drawCalls++;
+            sh.bind();  // restore the unified shader for following nodes
+            return;
+        }
+    }
+
+    sh.setMat4("uModel", world);
+    bindMaterial(sh, mat);
+    node.mesh->draw();
+    rec.drawCalls++;
+}
+
 void Renderer::mainPass(Scene& scene) {
     PassRecord& rec = debugger_.beginPass(
         "Main (PBR/Toon)",
@@ -333,41 +386,32 @@ void Renderer::mainPass(Scene& scene) {
     sh->bind();
     bindLighting(*sh, scene, 7);  // material slots use 0..6
 
+    // Collect so opaque draws can honour per-material sort priority (higher
+    // draws later / on top). Stable sort keeps scene-graph order for ties.
+    struct Item {
+        Node* node;
+        glm::mat4 world;
+    };
+    std::vector<Item> items;
     scene.root->traverse([&](Node& node, const glm::mat4& world) {
         if (!node.mesh || !node.material) return;
-        setFrontFaceFor(world);
-        Material& mat = *node.material;
-
-        // ---- Node-graph material path (UE-style material editor) ----
-        if (mat.graph) {
-            auto gsh = graphCache_.ensure(*mat.graph);
-            if (gsh && gsh->valid()) {
-                gsh->bind();
-                bindLighting(*gsh, scene, 8);  // graph samplers use 0..7
-                gsh->setMat4("uModel", world);
-                gsh->setInt("uShadingModel", (int)mat.model);
-                gsh->setInt("uFlipNormals", mat.flipNormals ? 1 : 0);
-                gsh->setFloat("uSpecularF0", mat.specularF0);
-                gsh->setFloat("uIBLIntensity", mat.iblIntensity);
-                gsh->setFloat("uTime", time_);
-                gsh->setVec2("uViewportSize", {(float)vpWidth_, (float)vpHeight_});
-                bindGraphMaterial(*gsh, mat);
-                if (mat.doubleSided) glDisable(GL_CULL_FACE);
-                else glEnable(GL_CULL_FACE);
-                node.mesh->draw();
-                rec.drawCalls++;
-                sh->bind();  // restore the unified shader for following nodes
-                return;
-            }
-        }
-
-        sh->setMat4("uModel", world);
-        bindMaterial(*sh, mat);
-        node.mesh->draw();
-        rec.drawCalls++;
+        // Transparent materials render later in their own sorted pass.
+        if (node.material->blend == BlendMode::Transparent) return;
+        items.push_back({&node, world});
     });
+    std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+        return a.node->material->sortPriority < b.node->material->sortPriority;
+    });
+    for (const Item& it : items) {
+        setFrontFaceFor(it.world);
+        drawWithMaterial(*sh, scene, *it.node, it.world, rec, false);
+    }
     glFrontFace(GL_CCW);
 
+    // Restore default depth state for the following passes.
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_POLYGON_OFFSET_FILL);
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
     rec.outputs.push_back({"Scene Color (HDR)", sceneFbo_.colorTex(), GL_TEXTURE_2D,
@@ -375,6 +419,65 @@ void Renderer::mainPass(Scene& scene) {
     rec.outputs.push_back({"Scene Depth", sceneFbo_.depthTex(), GL_TEXTURE_2D, sceneFbo_.width(),
                            sceneFbo_.height(), true, true});
     debugger_.endPass("Main (PBR/Toon)");
+}
+
+void Renderer::transparentPass(Scene& scene) {
+    // Collect blended nodes with their camera distance for back-to-front sorting.
+    struct Item {
+        Node* node;
+        glm::mat4 world;
+        float dist;
+    };
+    std::vector<Item> items;
+    scene.root->traverse([&](Node& node, const glm::mat4& world) {
+        if (!node.mesh || !node.material) return;
+        if (node.material->blend != BlendMode::Transparent) return;
+        items.push_back({&node, world, glm::length(cameraPos_ - glm::vec3(world[3]))});
+    });
+    if (items.empty()) return;
+
+    PassRecord& rec = debugger_.beginPass(
+        "Transparent",
+        "Alpha-blended materials, sorted back-to-front by camera distance. "
+        "Depth test on, depth writes off; runs after the skybox so blending "
+        "composites over the background. Transparent surfaces cast no shadows.");
+
+    // Priority groups first (lower priority = earlier), back-to-front inside
+    // each group so blending stays correct among equal-priority surfaces.
+    std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+        int pa = a.node->material->sortPriority, pb = b.node->material->sortPriority;
+        if (pa != pb) return pa < pb;
+        return a.dist > b.dist;
+    });
+
+    bindSceneTarget();
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glPolygonMode(GL_FRONT_AND_BACK, settings.wireframe ? GL_LINE : GL_FILL);
+
+    auto sh = shaders_->get("pbr");
+    sh->bind();
+    bindLighting(*sh, scene, 7);
+
+    for (const Item& it : items) {
+        setFrontFaceFor(it.world);
+        drawWithMaterial(*sh, scene, *it.node, it.world, rec, true);
+    }
+
+    glFrontFace(GL_CCW);
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+    rec.outputs.push_back({"Scene Color (HDR)", sceneFbo_.colorTex(), GL_TEXTURE_2D,
+                           sceneFbo_.width(), sceneFbo_.height()});
+    debugger_.endPass("Transparent");
 }
 
 // ZZZ-style inverted hull outlines as a dedicated pass: the mesh is drawn a
@@ -403,6 +506,7 @@ void Renderer::outlinePass(Scene& scene) {
 
     scene.root->traverse([&](Node& node, const glm::mat4& world) {
         if (!node.mesh || !node.material || !node.material->outline) return;
+        if (node.material->blend == BlendMode::Transparent) return;
         const Material& m = *node.material;
         setFrontFaceFor(world);
         sh->setMat4("uModel", world);

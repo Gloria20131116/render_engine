@@ -486,6 +486,33 @@ void EditorUI::drawMaterialEditor(Node& node) {
     if (ImGui::Combo("Shading Model", &model, "PBR (Cook-Torrance)\0Toon (ZZZ/Endfield)\0"))
         m.model = (ShadingModel)model;
 
+    int blend = (int)m.blend;
+    if (ImGui::Combo("Blend Mode", &blend, "Opaque\0Masked (Alpha Test)\0Transparent (Blend)\0"))
+        m.blend = (BlendMode)blend;
+    if (m.blend == BlendMode::Masked) {
+        ImGui::SliderFloat("Alpha Cutoff", &m.alphaCutoff, 0.0f, 1.0f);
+        if (!m.albedoMap) ImGui::TextDisabled("Cutoff tests the albedo texture's alpha channel");
+    } else if (m.blend == BlendMode::Transparent) {
+        ImGui::SliderFloat("Opacity", &m.opacity, 0.0f, 1.0f);
+    }
+
+    if (ImGui::TreeNode("Depth & Sorting")) {
+        ImGui::DragInt("Sort Priority", &m.sortPriority, 0.1f, -100, 100);
+        ImGui::SetItemTooltip("Higher draws later (on top). Transparent surfaces sort by\n"
+                              "priority first, then back-to-front by camera distance.");
+        ImGui::Checkbox("Depth Test", &m.depthTest);
+        ImGui::SetItemTooltip("Off = ignore scene depth, always render on top (x-ray).");
+        int dw = (int)m.depthWrite;
+        if (ImGui::Combo("Depth Write", &dw, "Auto (by blend mode)\0Force On\0Force Off\0"))
+            m.depthWrite = (DepthWriteMode)dw;
+        ImGui::SetItemTooltip("Auto: on for Opaque/Masked, off for Transparent.\n"
+                              "Force On helps blended hair occlude itself correctly.");
+        ImGui::DragFloat("Depth Bias", &m.depthBias, 0.05f, -16.0f, 16.0f);
+        ImGui::SetItemTooltip("Polygon offset. Negative pulls toward the camera\n"
+                              "(decals on walls), positive pushes away (fix z-fighting).");
+        ImGui::TreePop();
+    }
+
     ImGui::ColorEdit3("Base Color", &m.baseColor.x);
     if (m.model == ShadingModel::PBR) {
         ImGui::SliderFloat("Metallic", &m.metallic, 0.0f, 1.0f);
@@ -519,7 +546,6 @@ void EditorUI::drawMaterialEditor(Node& node) {
     ImGui::ColorEdit3("Emissive", &m.emissive.x);
     ImGui::SliderFloat("Emissive Power", &m.emissiveIntensity, 0.0f, 20.0f);
     ImGui::SliderFloat("Normal Strength", &m.normalStrength, 0.0f, 3.0f);
-    ImGui::SliderFloat("Alpha Cutoff", &m.alphaCutoff, 0.0f, 1.0f);
     ImGui::Checkbox("Double Sided", &m.doubleSided);
     ImGui::SameLine();
     ImGui::Checkbox("Flip Normals", &m.flipNormals);
