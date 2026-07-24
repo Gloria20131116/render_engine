@@ -1,6 +1,6 @@
 # Render Engine — PBR / NPR LookDev
 
-一个基于 **OpenGL 4.5 + C++17** 的渲染引擎，面向角色 lookDev（如《绝区零》《明日方舟：终末地》风格的角色渲染），内置类 RenderDoc 的帧调试器。
+一个基于 **OpenGL 4.5 + C++17** 的渲染引擎，面向角色 lookDev（风格的角色渲染），内置类 RenderDoc 的帧调试器。
 
 ![screenshot](screenshot.png)
 
