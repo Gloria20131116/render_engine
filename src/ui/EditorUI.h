@@ -33,6 +33,11 @@ public:
     void importModel(const std::string& path);
     void loadHdrDialog();
 
+    // Project save/load (whole scene: models, materials, lights, environment).
+    void newProject();
+    void openProjectDialog();
+    void saveProject(bool saveAs);
+
 private:
     void setupStyle();
     void buildDefaultLayout(unsigned dockspaceId);

@@ -26,6 +26,7 @@
 #include "scene/Material.h"
 #include "scene/Mesh.h"
 #include "scene/Scene.h"
+#include "scene/SceneProject.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -244,6 +245,14 @@ void EditorUI::draw(float dt) {
     ImGui::DockSpace(dockspaceId, ImVec2(0, 0), ImGuiDockNodeFlags_None);
     ImGui::End();
 
+    // Global shortcuts (skipped while typing in a text field)
+    if (!ImGui::GetIO().WantTextInput) {
+        if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S))
+            saveProject(true);
+        else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_S))
+            saveProject(false);
+    }
+
     drawViewport();
     drawHierarchy();
     drawInspector();
@@ -259,6 +268,11 @@ void EditorUI::draw(float dt) {
 void EditorUI::drawMenuBar() {
     if (!ImGui::BeginMenuBar()) return;
     if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("New Project")) newProject();
+        if (ImGui::MenuItem("Open Project...")) openProjectDialog();
+        if (ImGui::MenuItem("Save Project", "Ctrl+S")) saveProject(false);
+        if (ImGui::MenuItem("Save Project As...", "Ctrl+Shift+S")) saveProject(true);
+        ImGui::Separator();
         if (ImGui::MenuItem("Import Model...", "Ctrl+O")) importModelDialog();
         if (ImGui::MenuItem("Load HDR Environment...")) loadHdrDialog();
         ImGui::Separator();
@@ -269,6 +283,8 @@ void EditorUI::drawMenuBar() {
         if (ImGui::MenuItem("Add Sphere")) {
             auto n = scene_->root->addChild("Sphere");
             n->mesh = Mesh::sphere(0.5f, 48, 32);
+            n->primitive = PrimitiveKind::Sphere;
+            n->primitiveParams = {0.5f, 48, 32};
             n->material = std::make_shared<Material>();
             n->position = {0, 1, 0};
             scene_->selected = n;
@@ -276,6 +292,8 @@ void EditorUI::drawMenuBar() {
         if (ImGui::MenuItem("Add Cube")) {
             auto n = scene_->root->addChild("Cube");
             n->mesh = Mesh::cube(1.0f);
+            n->primitive = PrimitiveKind::Cube;
+            n->primitiveParams = {1.0f, 0, 0};
             n->material = std::make_shared<Material>();
             n->position = {0, 1, 0};
             scene_->selected = n;
@@ -283,6 +301,8 @@ void EditorUI::drawMenuBar() {
         if (ImGui::MenuItem("Add Plane")) {
             auto n = scene_->root->addChild("Plane");
             n->mesh = Mesh::plane(10.0f);
+            n->primitive = PrimitiveKind::Plane;
+            n->primitiveParams = {10.0f, 0, 0};
             n->material = std::make_shared<Material>();
             scene_->selected = n;
         }
@@ -329,6 +349,8 @@ void EditorUI::drawHierarchy() {
     if (ImGui::Button("+ Sphere")) {
         auto n = scene_->root->addChild("Sphere");
         n->mesh = Mesh::sphere(0.5f, 48, 32);
+        n->primitive = PrimitiveKind::Sphere;
+        n->primitiveParams = {0.5f, 48, 32};
         n->material = std::make_shared<Material>();
         n->position = {0, 1, 0};
         scene_->selected = n;
@@ -483,7 +505,9 @@ void EditorUI::drawMaterialEditor(Node& node) {
     }
 
     int model = (int)m.model;
-    if (ImGui::Combo("Shading Model", &model, "PBR (Cook-Torrance)\0Toon (ZZZ/Endfield)\0"))
+    if (ImGui::Combo("Shading Model", &model,
+                     "PBR (Cook-Torrance)\0Toon shading\0Principled\0Clearcoat\0Cloth\0"
+                     "Subsurface\0Glass\0"))
         m.model = (ShadingModel)model;
 
     int blend = (int)m.blend;
@@ -514,12 +538,9 @@ void EditorUI::drawMaterialEditor(Node& node) {
     }
 
     ImGui::ColorEdit3("Base Color", &m.baseColor.x);
-    if (m.model == ShadingModel::PBR) {
-        ImGui::SliderFloat("Metallic", &m.metallic, 0.0f, 1.0f);
-        ImGui::SliderFloat("Roughness", &m.roughness, 0.0f, 1.0f);
-        ImGui::SliderFloat("Specular F0", &m.specularF0, 0.0f, 0.16f);
-        ImGui::SliderFloat("IBL Intensity", &m.iblIntensity, 0.0f, 3.0f);
-    } else {
+    const bool isToon = m.model == ShadingModel::Toon;
+    const bool isPrincipled = (int)m.model >= (int)ShadingModel::Principled;
+    if (isToon) {
         ImGui::ColorEdit3("Shadow Color", &m.shadowColor.x);
         ImGui::SliderFloat("Shadow Threshold", &m.shadowThreshold, 0.0f, 1.0f);
         ImGui::SliderFloat("Shadow Softness", &m.shadowSoftness, 0.001f, 0.5f);
@@ -540,6 +561,42 @@ void EditorUI::drawMaterialEditor(Node& node) {
                 ImGui::SliderFloat("Darken", &m.outlineColorScale, 0.0f, 1.0f);
             else
                 ImGui::ColorEdit3("Outline Color", &m.outlineColor.x);
+        }
+    } else {
+        ImGui::SliderFloat("Metallic", &m.metallic, 0.0f, 1.0f);
+        ImGui::SliderFloat("Roughness", &m.roughness, 0.0f, 1.0f);
+        if (m.model == ShadingModel::PBR) {
+            ImGui::SliderFloat("Specular F0", &m.specularF0, 0.0f, 0.16f);
+        } else {
+            ImGui::SliderFloat("Specular", &m.specular, 0.0f, 1.0f);
+            ImGui::SliderFloat("Specular Tint", &m.specularTint, 0.0f, 1.0f);
+            ImGui::SliderFloat("IOR", &m.ior, 1.0f, 2.5f);
+            ImGui::SliderFloat("Anisotropic", &m.anisotropic, 0.0f, 1.0f);
+        }
+        ImGui::SliderFloat("IBL Intensity", &m.iblIntensity, 0.0f, 3.0f);
+    }
+
+    if (isPrincipled) {
+        if (ImGui::TreeNodeEx("Principled Lobes", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (m.model == ShadingModel::Principled || m.model == ShadingModel::Cloth ||
+                m.model == ShadingModel::Clearcoat) {
+                ImGui::SliderFloat("Sheen", &m.sheen, 0.0f, 1.0f);
+                ImGui::SliderFloat("Sheen Tint", &m.sheenTint, 0.0f, 1.0f);
+            }
+            if (m.model == ShadingModel::Principled || m.model == ShadingModel::Clearcoat ||
+                m.model == ShadingModel::Glass) {
+                ImGui::SliderFloat("Clearcoat", &m.clearcoat, 0.0f, 1.0f);
+                ImGui::SliderFloat("Clearcoat Gloss", &m.clearcoatGloss, 0.0f, 1.0f);
+            }
+            if (m.model == ShadingModel::Principled || m.model == ShadingModel::Subsurface) {
+                ImGui::SliderFloat("Subsurface", &m.subsurface, 0.0f, 1.0f);
+            }
+            if (m.model == ShadingModel::Principled || m.model == ShadingModel::Glass) {
+                ImGui::SliderFloat("Transmission", &m.transmission, 0.0f, 1.0f);
+                if (m.model == ShadingModel::Glass)
+                    ImGui::TextDisabled("Tip: set Blend Mode to Transparent for see-through glass");
+            }
+            ImGui::TreePop();
         }
     }
     ImGui::SliderFloat("AO", &m.ao, 0.0f, 1.0f);
@@ -884,6 +941,7 @@ void EditorUI::importModel(const std::string& path) {
         Log::error("Import failed (see log): %s", path.c_str());
         return;
     }
+    node->sourceModelPath = path;  // remembered by the project file for re-import
     scene_->root->addChild(node);
     scene_->selected = node;
 
@@ -948,4 +1006,36 @@ void EditorUI::loadHdrDialog() {
         scene_->environment.hdrPath = p;
         scene_->environment.dirty = true;
     }
+}
+
+// ---------------------------------------------------------- project save/load
+
+static const wchar_t kProjectFilter[] =
+    L"Render Engine Project (*.reproj)\0*.reproj\0All Files (*.*)\0*.*\0\0";
+
+void EditorUI::newProject() {
+    scene_->selected = nullptr;
+    scene_->root->children.clear();
+    scene_->pointLights.clear();
+    scene_->sun = SunLight{};
+    scene_->camera = Camera{};
+    scene_->environment = EnvironmentSettings{};
+    scene_->environment.dirty = true;
+    scene_->projectPath.clear();
+    SceneProject::clearLastProjectPath();  // next launch starts fresh again
+    Log::info("New empty project");
+}
+
+void EditorUI::openProjectDialog() {
+    std::string p = openFileDialog(kProjectFilter);
+    if (!p.empty()) SceneProject::load(p, *scene_, *renderer_);
+}
+
+void EditorUI::saveProject(bool saveAs) {
+    std::string path = scene_->projectPath;
+    if (saveAs || path.empty()) {
+        path = saveFileDialog(kProjectFilter, L"reproj");
+        if (path.empty()) return;
+    }
+    SceneProject::save(*scene_, *renderer_, path);
 }

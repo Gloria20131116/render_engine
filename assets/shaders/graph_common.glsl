@@ -4,6 +4,7 @@
 // helper library used by graph nodes.
 
 #include "brdf.glsl"
+#include "principled.glsl"
 
 // HLSL compatibility aliases so UE-style Custom node code ports directly.
 #define float2 vec2
@@ -28,12 +29,24 @@ out vec4 FragColor;
 // ---- Scene ----
 uniform vec3 uCameraPos;
 uniform mat4 uModel;        // for model-space helpers (SDF face shadow)
-uniform int uShadingModel;  // 0 = PBR, 1 = Toon
+uniform int uShadingModel;  // 0=PBR 1=Toon 2+=Principled family
 uniform int uFlipNormals;
 uniform float uTime;
 uniform vec2 uViewportSize;
 uniform float uSpecularF0;  // dielectric F0 from the material
 uniform float uOpacity;     // overall alpha multiplier (Transparent blend mode)
+
+// Principled extras (same names as pbr.frag)
+uniform float uSheen;
+uniform float uSheenTint;
+uniform float uClearcoat;
+uniform float uClearcoatGloss;
+uniform float uAnisotropic;
+uniform float uSubsurface;
+uniform float uSpecular;
+uniform float uSpecularTint;
+uniform float uTransmission;
+uniform float uIOR;
 
 // ---- Lights (identical names/layout to pbr.frag) ----
 uniform vec3 uSunDirection;
@@ -170,6 +183,63 @@ vec3 evaluateToon(vec3 albedo, float ao, vec3 N, vec3 V, vec3 shadowColor, float
 
     color += texture(uIrradianceMap, N).rgb * albedo * 0.15 * uEnvIntensity * uIBLIntensity;
     return color * ao;
+}
+
+vec3 evaluatePrincipled(vec3 albedo, float metallic, float roughness, float ao, vec3 N, vec3 V) {
+    float sheen = uSheen;
+    float clearcoat = uClearcoat;
+    float subsurface = uSubsurface;
+    float transmission = uTransmission;
+    if (uShadingModel == 3) clearcoat = max(clearcoat, 0.6);
+    else if (uShadingModel == 4) { sheen = max(sheen, 0.7); metallic = 0.0; clearcoat = 0.0; transmission = 0.0; }
+    else if (uShadingModel == 5) { subsurface = max(subsurface, 0.65); metallic = 0.0; transmission = 0.0; }
+    else if (uShadingModel == 6) { transmission = max(transmission, 0.85); metallic = 0.0; sheen = 0.0; clearcoat = max(clearcoat, 0.15); }
+
+    float ibl = uIBLIntensity > 0.0 ? uIBLIntensity : 1.0;
+    vec3 Lo = vec3(0.0);
+    {
+        vec3 L = -normalize(uSunDirection);
+        Lo += EvalPrincipledBRDF(N, V, L, albedo, metallic, roughness, sheen, uSheenTint,
+                                 clearcoat, uClearcoatGloss, uAnisotropic, subsurface, uSpecular,
+                                 uSpecularTint, transmission, uIOR) *
+              uSunColor * sunShadow(N);
+    }
+    for (int i = 0; i < uNumPointLights; ++i) {
+        vec3 toLight = uPointLights[i].position - fs.worldPos;
+        float dist = length(toLight);
+        if (dist > uPointLights[i].radius) continue;
+        vec3 L = toLight / dist;
+        Lo += EvalPrincipledBRDF(N, V, L, albedo, metallic, roughness, sheen, uSheenTint,
+                                 clearcoat, uClearcoatGloss, uAnisotropic, subsurface, uSpecular,
+                                 uSpecularTint, transmission, uIOR) *
+              uPointLights[i].color * pointAttenuation(dist, uPointLights[i].radius);
+    }
+
+    float eta = max(uIOR, 1.0001);
+    float r0 = (eta - 1.0) / (eta + 1.0);
+    r0 *= r0 * clamp(uSpecular * 2.0, 0.0, 1.0);
+    vec3 F0 = mix(mix(vec3(r0), prin_Tint(albedo) * r0, clamp(uSpecularTint, 0.0, 1.0)), albedo, metallic);
+    float NdotV = max(dot(N, V), 1e-4);
+    vec3 F = F_SchlickRoughness(F0, NdotV, roughness);
+    float diffuseWeight = (1.0 - metallic) * (1.0 - transmission);
+    vec3 diffuseIBL = texture(uIrradianceMap, N).rgb * albedo * (1.0 - F) * diffuseWeight;
+    if (subsurface > 0.0) {
+        vec3 back = texture(uIrradianceMap, -N).rgb * albedo;
+        diffuseIBL = mix(diffuseIBL, mix(diffuseIBL, back, 0.45), subsurface);
+    }
+    vec3 R = reflect(-V, N);
+    vec3 prefiltered = textureLod(uPrefilterMap, R, roughness * float(uPrefilterMips - 1)).rgb;
+    vec2 envBRDF = texture(uBRDFLUT, vec2(NdotV, roughness)).rg;
+    vec3 specularIBL = prefiltered * (F0 * envBRDF.x + envBRDF.y);
+    if (clearcoat > 0.0) {
+        vec3 coatPref = textureLod(uPrefilterMap, R, (1.0 - uClearcoatGloss) * 2.0).rgb;
+        specularIBL += coatPref * (0.04 * envBRDF.x + envBRDF.y) * clearcoat * 0.25;
+    }
+    if (transmission > 0.0) {
+        diffuseIBL += texture(uIrradianceMap, -V).rgb * sqrt(max(albedo, vec3(0.0))) *
+                      transmission * (1.0 - F) * 0.65;
+    }
+    return Lo + (diffuseIBL + specularIBL) * uEnvIntensity * ibl * ao;
 }
 
 // ============================================================================

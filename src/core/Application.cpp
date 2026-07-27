@@ -15,6 +15,7 @@
 #include "material/MaterialGraph.h"
 #include "scene/Material.h"
 #include "scene/Mesh.h"
+#include "scene/SceneProject.h"
 
 bool Application::init() {
     if (!window_.init(1600, 900, "Render Engine - PBR / NPR LookDev", bus_)) return false;
@@ -25,7 +26,12 @@ bool Application::init() {
     renderer_.init(shaders_);
     ui_.init(window_, scene_, renderer_, shaders_, bus_);
 
-    buildDefaultScene();
+    // Restore the last saved/opened project; fall back to the default scene.
+    std::string lastProject = SceneProject::readLastProjectPath();
+    if (lastProject.empty() || !std::filesystem::exists(lastProject) ||
+        !SceneProject::load(lastProject, scene_, renderer_)) {
+        buildDefaultScene();
+    }
 
     bus_.subscribe<FileDroppedEvent>(
         [this](const FileDroppedEvent& e) { onFileDropped(e.path); });
@@ -44,6 +50,8 @@ void Application::buildDefaultScene() {
     // Ground
     auto ground = scene_.root->addChild("Ground");
     ground->mesh = Mesh::plane(30.0f);
+    ground->primitive = PrimitiveKind::Plane;
+    ground->primitiveParams = {30.0f, 0, 0};
     ground->material = std::make_shared<Material>();
     ground->material->name = "Ground";
     ground->material->baseColor = {0.35f, 0.35f, 0.37f};
@@ -57,6 +65,8 @@ void Application::buildDefaultScene() {
         for (int c = 0; c < cols; ++c) {
             auto s = grid->addChild("Sphere R" + std::to_string(row) + "C" + std::to_string(c));
             s->mesh = Mesh::sphere(0.42f, 48, 32);
+            s->primitive = PrimitiveKind::Sphere;
+            s->primitiveParams = {0.42f, 48, 32};
             s->position = {(c - (cols - 1) * 0.5f) * 1.0f, row * 1.0f, 0.0f};
             auto m = std::make_shared<Material>();
             m->name = (row == 0 ? "Dielectric r=" : "Metal r=") +
@@ -68,10 +78,53 @@ void Application::buildDefaultScene() {
         }
     }
 
+    // Principled multi-lobe demo row: one sphere per shading model so the new
+    // surface types are visible (and switchable in the Inspector) on first launch.
+    {
+        auto row = scene_.root->addChild("Principled Demo");
+        row->position = {0.0f, 0.55f, 2.6f};
+        struct Demo {
+            const char* name;
+            ShadingModel model;
+            glm::vec3 color;
+            void (*tweak)(Material&);
+        };
+        const Demo demos[] = {
+            {"Principled", ShadingModel::Principled, {0.85f, 0.30f, 0.25f},
+             [](Material& m) { m.roughness = 0.35f; m.sheen = 0.3f; m.anisotropic = 0.4f; }},
+            {"Clearcoat", ShadingModel::Clearcoat, {0.15f, 0.25f, 0.75f},
+             [](Material& m) { m.metallic = 0.3f; m.roughness = 0.4f; m.clearcoat = 1.0f;
+                               m.clearcoatGloss = 0.95f; }},
+            {"Cloth", ShadingModel::Cloth, {0.55f, 0.35f, 0.55f},
+             [](Material& m) { m.roughness = 0.85f; m.sheen = 0.9f; m.sheenTint = 0.6f; }},
+            {"Subsurface", ShadingModel::Subsurface, {0.87f, 0.68f, 0.58f},
+             [](Material& m) { m.roughness = 0.55f; m.subsurface = 0.8f; }},
+            {"Glass", ShadingModel::Glass, {0.90f, 0.95f, 1.00f},
+             [](Material& m) { m.roughness = 0.05f; m.transmission = 0.9f; m.clearcoat = 0.3f;
+                               m.blend = BlendMode::Transparent; m.opacity = 0.35f; }},
+        };
+        const int n = (int)(sizeof(demos) / sizeof(demos[0]));
+        for (int i = 0; i < n; ++i) {
+            auto s = row->addChild(demos[i].name);
+            s->mesh = Mesh::sphere(0.42f, 48, 32);
+            s->primitive = PrimitiveKind::Sphere;
+            s->primitiveParams = {0.42f, 48, 32};
+            s->position = {(i - (n - 1) * 0.5f) * 1.0f, 0.0f, 0.0f};
+            auto m = std::make_shared<Material>();
+            m->name = demos[i].name;
+            m->model = demos[i].model;
+            m->baseColor = demos[i].color;
+            demos[i].tweak(*m);
+            s->material = m;
+        }
+    }
+
     // Toon demo sphere (ZZZ / Endfield style stand-in until a model is imported)
     auto toon = scene_.root->addChild("Toon Demo");
     toon->position = {0.0f, 1.0f, 1.2f};
     toon->mesh = Mesh::sphere(0.6f, 64, 48);
+    toon->primitive = PrimitiveKind::Sphere;
+    toon->primitiveParams = {0.6f, 64, 48};
     auto toonMat = std::make_shared<Material>();
     toonMat->name = "Toon Preview";
     toonMat->model = ShadingModel::Toon;
@@ -84,6 +137,8 @@ void Application::buildDefaultScene() {
     auto graphDemo = scene_.root->addChild("Graph Demo");
     graphDemo->position = {2.2f, 1.0f, 1.2f};
     graphDemo->mesh = Mesh::sphere(0.6f, 64, 48);
+    graphDemo->primitive = PrimitiveKind::Sphere;
+    graphDemo->primitiveParams = {0.6f, 64, 48};
     auto graphMat = std::make_shared<Material>();
     graphMat->name = "Graph Preview";
     graphMat->graph = std::make_shared<MaterialGraph>();

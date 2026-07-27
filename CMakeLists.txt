@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Allow old third-party projects to configure under CMake 4.x
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 
+# Static CRT so the exe runs on machines without the VC++ redistributable.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 if(MSVC)
     add_compile_options(/MP)
 endif()
@@ -65,6 +68,7 @@ FetchContent_Declare(imnodes
     GIT_REPOSITORY https://github.com/Nelarius/imnodes.git
     GIT_TAG master
     GIT_SHALLOW TRUE
+    GIT_SUBMODULES ""
     SOURCE_SUBDIR cmake_unused)
 
 # ---------------- Assimp ----------------

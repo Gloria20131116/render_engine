@@ -26,14 +26,24 @@ static glm::vec3 jsonToVec3(const json& j, const glm::vec3& fallback = glm::vec3
 
 static const char* shadingModelStr(ShadingModel m) {
     switch (m) {
-        case ShadingModel::PBR:  return "PBR";
-        case ShadingModel::Toon: return "Toon";
+        case ShadingModel::PBR:        return "PBR";
+        case ShadingModel::Toon:       return "Toon";
+        case ShadingModel::Principled: return "Principled";
+        case ShadingModel::Clearcoat:  return "Clearcoat";
+        case ShadingModel::Cloth:      return "Cloth";
+        case ShadingModel::Subsurface: return "Subsurface";
+        case ShadingModel::Glass:      return "Glass";
     }
     return "PBR";
 }
 
 static ShadingModel parseShadingModel(const std::string& s) {
     if (s == "Toon") return ShadingModel::Toon;
+    if (s == "Principled") return ShadingModel::Principled;
+    if (s == "Clearcoat") return ShadingModel::Clearcoat;
+    if (s == "Cloth") return ShadingModel::Cloth;
+    if (s == "Subsurface") return ShadingModel::Subsurface;
+    if (s == "Glass") return ShadingModel::Glass;
     return ShadingModel::PBR;
 }
 
@@ -136,15 +146,7 @@ static std::shared_ptr<Texture> loadTexture(const std::string& relPath, const fs
 
 // ---- public API ----
 
-bool MaterialAsset::save(const Material& mat, const std::string& path) {
-    fs::path matPath(path);
-    fs::path matDir = matPath.parent_path();
-    if (!matDir.empty()) {
-        std::error_code ec;
-        fs::create_directories(matDir, ec);
-    }
-
-    json j;
+void MaterialAsset::toJson(const Material& mat, json& j, const fs::path& matDir) {
     j["name"]  = mat.name;
     j["model"] = shadingModelStr(mat.model);
 
@@ -198,6 +200,17 @@ bool MaterialAsset::save(const Material& mat, const std::string& path) {
     j["outlineFromBaseColor"] = mat.outlineFromBaseColor;
     j["outlineColorScale"]    = mat.outlineColorScale;
 
+    // Principled extras
+    j["sheen"]          = mat.sheen;
+    j["sheenTint"]      = mat.sheenTint;
+    j["clearcoat"]      = mat.clearcoat;
+    j["clearcoatGloss"] = mat.clearcoatGloss;
+    j["anisotropic"]    = mat.anisotropic;
+    j["subsurface"]     = mat.subsurface;
+    j["specular"]       = mat.specular;
+    j["transmission"]   = mat.transmission;
+    j["ior"]            = mat.ior;
+
     // Textures (relative paths)
     json textures;
     textures["albedo"]   = textureRelPath(mat.albedoMap,    matDir);
@@ -217,6 +230,18 @@ bool MaterialAsset::save(const Material& mat, const std::string& path) {
         mat.graph->toJson(g);
         j["graph"] = g;
     }
+}
+
+bool MaterialAsset::save(const Material& mat, const std::string& path) {
+    fs::path matPath(path);
+    fs::path matDir = matPath.parent_path();
+    if (!matDir.empty()) {
+        std::error_code ec;
+        fs::create_directories(matDir, ec);
+    }
+
+    json j;
+    toJson(mat, j, matDir);
 
     std::ofstream ofs(matPath);
     if (!ofs) {
@@ -228,23 +253,7 @@ bool MaterialAsset::save(const Material& mat, const std::string& path) {
     return true;
 }
 
-bool MaterialAsset::load(const std::string& path, Material& outMat) {
-    std::ifstream ifs(path);
-    if (!ifs) {
-        Log::error("MaterialAsset::load – cannot open '%s'", path.c_str());
-        return false;
-    }
-
-    json j;
-    try {
-        ifs >> j;
-    } catch (const json::parse_error& e) {
-        Log::error("MaterialAsset::load – JSON parse error in '%s': %s", path.c_str(), e.what());
-        return false;
-    }
-
-    fs::path matDir = fs::path(path).parent_path();
-
+void MaterialAsset::fromJson(const json& j, Material& outMat, const fs::path& matDir) {
     auto str  = [&](const char* key, std::string& dst)  { if (j.contains(key) && j[key].is_string())  dst = j[key].get<std::string>(); };
     auto flt  = [&](const char* key, float& dst)         { if (j.contains(key) && j[key].is_number())  dst = j[key].get<float>(); };
     auto bl   = [&](const char* key, bool& dst)          { if (j.contains(key) && j[key].is_boolean()) dst = j[key].get<bool>(); };
@@ -309,6 +318,17 @@ bool MaterialAsset::load(const std::string& path, Material& outMat) {
     bl ("outlineFromBaseColor", outMat.outlineFromBaseColor);
     flt("outlineColorScale",    outMat.outlineColorScale);
 
+    // Principled extras
+    flt("sheen", outMat.sheen);
+    flt("sheenTint", outMat.sheenTint);
+    flt("clearcoat", outMat.clearcoat);
+    flt("clearcoatGloss", outMat.clearcoatGloss);
+    flt("anisotropic", outMat.anisotropic);
+    flt("subsurface", outMat.subsurface);
+    flt("specular", outMat.specular);
+    flt("transmission", outMat.transmission);
+    flt("ior", outMat.ior);
+
     // Textures
     if (j.contains("textures") && j["textures"].is_object()) {
         const auto& tex = j["textures"];
@@ -333,6 +353,24 @@ bool MaterialAsset::load(const std::string& path, Material& outMat) {
     outMat.graph = j.contains("graph") && j["graph"].is_object()
                        ? MaterialGraph::fromJson(j["graph"])
                        : nullptr;
+}
+
+bool MaterialAsset::load(const std::string& path, Material& outMat) {
+    std::ifstream ifs(path);
+    if (!ifs) {
+        Log::error("MaterialAsset::load – cannot open '%s'", path.c_str());
+        return false;
+    }
+
+    json j;
+    try {
+        ifs >> j;
+    } catch (const json::parse_error& e) {
+        Log::error("MaterialAsset::load – JSON parse error in '%s': %s", path.c_str(), e.what());
+        return false;
+    }
+
+    fromJson(j, outMat, fs::path(path).parent_path());
 
     outMat.assetPath = path;
     Log::info("Loaded material '%s' from %s", outMat.name.c_str(), path.c_str());

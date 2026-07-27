@@ -12,6 +12,8 @@
 | 事件总线 | 类型化 pub/sub（窗口、按键、文件变更、Shader 重载、拖放等事件） |
 | Shader 热重载 | 轮询文件时间戳，自动重编译；支持 `#include`，include 的文件（如 `brdf.glsl`）变更同样触发依赖它的 Shader 重载；编译失败保留旧程序并显示错误 |
 | Cook-Torrance PBR | 金属度/粗糙度工作流，直接光 + IBL（辐照度图 + 预滤波镜面 + BRDF LUT，split-sum） |
+| 多 Shading Model | Inspector 一键切换 7 种：PBR (Cook-Torrance) / Toon shading / Principled（多 lobe：漫反射+镜面+各向异性+sheen）/ Clearcoat（清漆车漆）/ Cloth（布料 sheen）/ Subsurface（次表面近似）/ Glass（薄透射）；核心在 `assets/shaders/principled.glsl`（GTR1/GTR2 各向异性 + sheen + clearcoat + thin transmission），节点图材质同样可用；默认场景含 "Principled Demo" 一排演示球 |
+| 项目保存 | File 菜单 New / Open / Save（Ctrl+S）/ Save As：整个场景（导入模型路径、节点变换、全部材质含节点图、灯光、HDR 环境、相机、后处理）序列化为 `.reproj` JSON；启动时自动恢复上次项目 |
 | 可编辑 BRDF | ① UI 内直接切换 D/G/F 各项变体（GGX/Beckmann/Blinn-Phong、Smith 高度相关/Schlick-GGX/Implicit、Schlick/粗糙度 Schlick/无）；② 在 **BRDF Editor** 面板直接编辑 `assets/shaders/brdf.glsl` 源码，保存即热重载 |
 | UE 式材质编辑 | **Material Graph** 面板：拖拽节点连线（右键添加节点），实时生成 GLSL 并编译；约 40 种节点：常量/数学/向量/纹理采样/UV（Tiling/Rotate/Panner）/工具（Fresnel/噪声/时间）/Toon（Ramp、SDF 面部阴影、Kajiya-Kay 各向异性发丝高光、风格化高光、边缘光、Matcap、次表面近似）；**Custom 代码节点**（UE Custom HLSL 式，节点内写函数体，内置 float2/3/4、lerp、saturate、frac、mul 等 HLSL 别名，可用 gN/gV/gUV/uTime 全局量，Apply 即重编译）；生成的 shader 落盘到 `assets/shaders/generated/` 可检视，参与热重载 |
 | 材质资产 | 内置 11 种预设（PBR/金属/玻璃/皮肤/布料/自发光/Toon 皮肤·头发·布料等），Inspector 一键套用；材质（含节点图）可保存/加载为 JSON `.mat` 文件（`assets/materials/`） |
@@ -38,6 +40,8 @@ build\render_engine.exe
 
 - **相机**：视口内左键拖动 = 环绕，Shift+左键 / 中键 = 平移，滚轮 = 缩放
 - **导入模型**：`File > Import Model...`，或直接把 FBX/GLTF/PMX 拖进窗口
+- **项目保存/打开**：`File > Save Project`（Ctrl+S）把当前场景存为 `.reproj`，`Open Project...` 恢复；下次启动自动加载上次项目，`New Project` 清空
+- **切换 Shading Model**：选中物体 → Inspector 的 `Shading Model` 下拉在 PBR / Toon shading / Principled / Clearcoat / Cloth / Subsurface / Glass 间切换，下方参数随模型变化（Principled Lobes 区调 sheen/clearcoat/subsurface/transmission）；默认场景 "Principled Demo" 一排球即各模型对比
 - **角色 lookDev 流程**：导入模型 → 在 Inspector 里选中根节点 → `Set subtree -> Toon` 一键切卡通材质（含描边）→ 逐材质调 ramp 阈值/软度、边缘光、描边宽度；写实渲染则保持 PBR 并绑定金属度/粗糙度/法线贴图
 - **环境**：把 `.hdr` 拖进窗口或在 Environment 面板加载（HDR 可从 Poly Haven 下载）
 - **贴图**：选中节点后把图片拖进窗口 = 设为 albedo；或在材质的 Textures 槽位中逐张加载

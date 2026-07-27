@@ -290,6 +290,16 @@ void Renderer::bindMaterial(Shader& sh, const Material& mat) {
     sh.setFloat("uToonSpecIntensity", mat.toonSpecIntensity);
     sh.setVec3("uToonSpecColor", mat.toonSpecColor);
 
+    sh.setFloat("uSheen", mat.sheen);
+    sh.setFloat("uSheenTint", mat.sheenTint);
+    sh.setFloat("uClearcoat", mat.clearcoat);
+    sh.setFloat("uClearcoatGloss", mat.clearcoatGloss);
+    sh.setFloat("uAnisotropic", mat.anisotropic);
+    sh.setFloat("uSubsurface", mat.subsurface);
+    sh.setFloat("uSpecular", mat.specular);
+    sh.setFloat("uTransmission", mat.transmission);
+    sh.setFloat("uIOR", mat.ior);
+
     auto bindTex = [&sh](const char* flag, const char* sampler, int unit,
                          const std::shared_ptr<Texture>& tex) {
         sh.setInt(flag, tex ? 1 : 0);
@@ -341,6 +351,16 @@ void Renderer::drawWithMaterial(Shader& sh, Scene& scene, Node& node, const glm:
             gsh->setFloat("uOpacity", mat.blend == BlendMode::Transparent ? mat.opacity : 1.0f);
             gsh->setFloat("uTime", time_);
             gsh->setVec2("uViewportSize", {(float)vpWidth_, (float)vpHeight_});
+            gsh->setFloat("uSheen", mat.sheen);
+            gsh->setFloat("uSheenTint", mat.sheenTint);
+            gsh->setFloat("uClearcoat", mat.clearcoat);
+            gsh->setFloat("uClearcoatGloss", mat.clearcoatGloss);
+            gsh->setFloat("uAnisotropic", mat.anisotropic);
+            gsh->setFloat("uSubsurface", mat.subsurface);
+            gsh->setFloat("uSpecular", mat.specular);
+            gsh->setFloat("uSpecularTint", mat.specularTint);
+            gsh->setFloat("uTransmission", mat.transmission);
+            gsh->setFloat("uIOR", mat.ior);
             bindGraphMaterial(*gsh, mat);
             if (mat.doubleSided) glDisable(GL_CULL_FACE);
             else glEnable(GL_CULL_FACE);

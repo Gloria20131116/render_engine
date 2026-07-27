@@ -6,8 +6,13 @@
 class Texture;
 
 enum class ShadingModel : int {
-    PBR = 0,   // Cook-Torrance + IBL
-    Toon = 1,  // ZZZ / Endfield style NPR (ramp shading, stylized specular, rim)
+    PBR = 0,         // Cook-Torrance + IBL
+    Toon = 1,        // NPR ramp / stylized specular / rim
+    Principled = 2,  // Artist-friendly multi-lobe surface (diffuse + specular + sheen)
+    Clearcoat = 3,   // Principled + clearcoat layer
+    Cloth = 4,       // Sheen-forward cloth / velvet
+    Subsurface = 5,  // Soft subsurface-style diffuse
+    Glass = 6,       // Thin-glass style specular + transmission approx
 };
 
 // BRDF term variants, selectable at runtime from the BRDF editor UI.
@@ -73,7 +78,7 @@ struct Material {
     float toonSpecIntensity = 0.6f;
     glm::vec3 toonSpecColor{1.0f};
 
-    // ---- Outline (ZZZ-style inverted hull, used by Toon materials) ----
+    // ---- Outline (inverted hull, used by Toon materials) ----
     bool outline = false;
     float outlineWidthPx = 3.0f;       // constant width in screen pixels
     float outlineMaxWorldWidth = 0.03f;  // clamp extrusion in world units (close-ups)
@@ -81,6 +86,17 @@ struct Material {
     glm::vec3 outlineColor{0.05f, 0.03f, 0.06f};
     bool outlineFromBaseColor = true;  // derive color from darkened base color
     float outlineColorScale = 0.25f;   // multiplier when deriving from base
+
+    // ---- Principled multi-lobe extras (Clearcoat / Cloth / Subsurface / Glass) ----
+    float sheen = 0.0f;            // grazing-angle velvet / cloth highlight
+    float sheenTint = 0.5f;        // 0 = white sheen, 1 = tinted by base color
+    float clearcoat = 0.0f;        // secondary clearcoat layer weight
+    float clearcoatGloss = 1.0f;   // 1 = sharp coat, 0 = rough coat
+    float anisotropic = 0.0f;      // specular anisotropy (-ish stretch)
+    float subsurface = 0.0f;       // soft SSS-style diffuse mix
+    float specular = 0.5f;         // dielectric specular intensity (maps to F0 scale)
+    float transmission = 0.0f;     // thin transmission weight (Glass)
+    float ior = 1.5f;              // index of refraction for Glass / dielectrics
 
     // ---- Texture slots (null = use scalar parameters) ----
     std::shared_ptr<Texture> albedoMap;

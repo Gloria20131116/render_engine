@@ -9,6 +9,9 @@
 class Mesh;
 struct Material;
 
+// How this node's mesh was created, so a project file can rebuild it.
+enum class PrimitiveKind : int { None = 0, Sphere = 1, Cube = 2, Plane = 3 };
+
 // Scene graph node. Owns children; may reference a mesh + material.
 class Node : public std::enable_shared_from_this<Node> {
 public:
@@ -16,6 +19,11 @@ public:
 
     std::string name;
     bool visible = true;
+
+    // ---- Serialization hints (project save/load) ----
+    std::string sourceModelPath;              // set on the root of an imported model subtree
+    PrimitiveKind primitive = PrimitiveKind::None;
+    glm::vec3 primitiveParams{0.0f};          // sphere: radius/segments/rings; cube/plane: size
 
     glm::vec3 position{0.0f};
     glm::vec3 rotationEuler{0.0f};  // degrees

@@ -27,6 +27,8 @@ public:
 
     std::shared_ptr<Node> selected;  // editor selection
 
+    std::string projectPath;  // current .reproj file ("" = unsaved new project)
+
     bool addPointLight() {
         if ((int)pointLights.size() >= kMaxPointLights) return false;
         PointLight l;

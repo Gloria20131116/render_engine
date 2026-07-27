@@ -5,3 +5,5 @@ out/
 *.user
 imgui.ini
 assets/shaders/generated/
+dist/
+assets/last_project.txt

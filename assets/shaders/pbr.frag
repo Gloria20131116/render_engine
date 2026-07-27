@@ -1,8 +1,9 @@
 #version 450 core
-// Main forward shader: Cook-Torrance PBR + IBL, or NPR toon shading
-// (ZZZ / Endfield style) selected per-material via uShadingModel.
+// Main forward shader: Cook-Torrance PBR, NPR toon, and multi-lobe principled
+// surfaces (Clearcoat / Cloth / Subsurface / Glass) selected via uShadingModel.
 
 #include "brdf.glsl"
+#include "principled.glsl"
 
 in VS_OUT {
     vec3 worldPos;
@@ -18,7 +19,7 @@ out vec4 FragColor;
 uniform vec3 uCameraPos;
 
 // ---- Material scalars ----
-uniform int uShadingModel;  // 0 = PBR, 1 = Toon
+uniform int uShadingModel;  // 0=PBR 1=Toon 2=Principled 3=Clearcoat 4=Cloth 5=Subsurface 6=Glass
 uniform vec3 uBaseColor;
 uniform float uMetallic;
 uniform float uRoughness;
@@ -49,6 +50,17 @@ uniform float uRimIntensity;
 uniform float uToonSpecSize;
 uniform float uToonSpecIntensity;
 uniform vec3 uToonSpecColor;
+
+// ---- Principled extras ----
+uniform float uSheen;
+uniform float uSheenTint;
+uniform float uClearcoat;
+uniform float uClearcoatGloss;
+uniform float uAnisotropic;
+uniform float uSubsurface;
+uniform float uSpecular;
+uniform float uTransmission;
+uniform float uIOR;
 
 // ---- Material textures ----
 uniform int uHasAlbedoMap;    uniform sampler2D uAlbedoMap;
@@ -100,7 +112,6 @@ float sunShadow(vec3 N) {
     if (proj.z > 1.0 || proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0)
         return 1.0;
     float bias = max(uShadowBias * (1.0 - dot(N, -uSunDirection)) * 4.0, uShadowBias);
-    // 3x3 PCF
     float shadow = 0.0;
     vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
     for (int x = -1; x <= 1; ++x)
@@ -117,12 +128,31 @@ float pointAttenuation(float dist, float radius) {
     return att * window;
 }
 
-// ---------------------------------------------------------------- PBR path
+void resolvePrincipledParams(inout float metallic, inout float sheen, inout float clearcoat,
+                             inout float subsurface, inout float transmission) {
+    if (uShadingModel == 3) {
+        clearcoat = max(clearcoat, 0.6);
+    } else if (uShadingModel == 4) {
+        sheen = max(sheen, 0.7);
+        metallic = 0.0;
+        clearcoat = 0.0;
+        transmission = 0.0;
+    } else if (uShadingModel == 5) {
+        subsurface = max(subsurface, 0.65);
+        metallic = 0.0;
+        transmission = 0.0;
+    } else if (uShadingModel == 6) {
+        transmission = max(transmission, 0.85);
+        metallic = 0.0;
+        sheen = 0.0;
+        clearcoat = max(clearcoat, 0.15);
+    }
+}
+
 vec3 shadePBR(vec3 albedo, float metallic, float roughness, float ao, vec3 N, vec3 V) {
     vec3 F0 = mix(vec3(uSpecularF0), albedo, metallic);
     vec3 Lo = vec3(0.0);
 
-    // Sun
     {
         vec3 L = -normalize(uSunDirection);
         vec3 radiance = uSunColor * sunShadow(N);
@@ -130,7 +160,6 @@ vec3 shadePBR(vec3 albedo, float metallic, float roughness, float ao, vec3 N, ve
                        uFresnelType, uSpecularTint, uEnergyCompensation) * radiance;
     }
 
-    // Point lights
     for (int i = 0; i < uNumPointLights; ++i) {
         vec3 toLight = uPointLights[i].position - fs.worldPos;
         float dist = length(toLight);
@@ -141,7 +170,6 @@ vec3 shadePBR(vec3 albedo, float metallic, float roughness, float ao, vec3 N, ve
                        uFresnelType, uSpecularTint, uEnergyCompensation) * radiance;
     }
 
-    // IBL ambient
     float NdotV = max(dot(N, V), 1e-4);
     vec3 F = F_SchlickRoughness(F0, NdotV, roughness);
     vec3 kd = (1.0 - F) * (1.0 - metallic);
@@ -158,15 +186,73 @@ vec3 shadePBR(vec3 albedo, float metallic, float roughness, float ao, vec3 N, ve
     return Lo + ambient;
 }
 
-// ---------------------------------------------------------------- Toon path
+vec3 shadePrincipled(vec3 albedo, float metallic, float roughness, float ao, vec3 N, vec3 V) {
+    float sheen = uSheen;
+    float clearcoat = uClearcoat;
+    float subsurface = uSubsurface;
+    float transmission = uTransmission;
+    resolvePrincipledParams(metallic, sheen, clearcoat, subsurface, transmission);
+
+    vec3 Lo = vec3(0.0);
+    {
+        vec3 L = -normalize(uSunDirection);
+        vec3 radiance = uSunColor * sunShadow(N);
+        Lo += EvalPrincipledBRDF(N, V, L, albedo, metallic, roughness, sheen, uSheenTint,
+                                 clearcoat, uClearcoatGloss, uAnisotropic, subsurface, uSpecular,
+                                 uSpecularTint, transmission, uIOR) *
+              radiance;
+    }
+    for (int i = 0; i < uNumPointLights; ++i) {
+        vec3 toLight = uPointLights[i].position - fs.worldPos;
+        float dist = length(toLight);
+        if (dist > uPointLights[i].radius) continue;
+        vec3 L = toLight / dist;
+        vec3 radiance = uPointLights[i].color * pointAttenuation(dist, uPointLights[i].radius);
+        Lo += EvalPrincipledBRDF(N, V, L, albedo, metallic, roughness, sheen, uSheenTint,
+                                 clearcoat, uClearcoatGloss, uAnisotropic, subsurface, uSpecular,
+                                 uSpecularTint, transmission, uIOR) *
+              radiance;
+    }
+
+    float eta = max(uIOR, 1.0001);
+    float r0 = (eta - 1.0) / (eta + 1.0);
+    r0 = r0 * r0 * clamp(uSpecular * 2.0, 0.0, 1.0);
+    vec3 tint = prin_Tint(albedo);
+    vec3 F0 = mix(vec3(r0), tint * r0, clamp(uSpecularTint, 0.0, 1.0));
+    F0 = mix(F0, albedo, metallic);
+
+    float NdotV = max(dot(N, V), 1e-4);
+    vec3 F = F_SchlickRoughness(F0, NdotV, roughness);
+    float diffuseWeight = (1.0 - metallic) * (1.0 - transmission);
+    vec3 diffuseIBL = texture(uIrradianceMap, N).rgb * albedo * (1.0 - F) * diffuseWeight;
+    if (subsurface > 0.0) {
+        vec3 back = texture(uIrradianceMap, -N).rgb * albedo;
+        diffuseIBL = mix(diffuseIBL, mix(diffuseIBL, back, 0.45), subsurface);
+    }
+    vec3 R = reflect(-V, N);
+    vec3 prefiltered = textureLod(uPrefilterMap, R, roughness * float(uPrefilterMips - 1)).rgb;
+    vec2 envBRDF = texture(uBRDFLUT, vec2(NdotV, roughness)).rg;
+    vec3 specularIBL = prefiltered * (F0 * envBRDF.x + envBRDF.y);
+    if (clearcoat > 0.0) {
+        vec3 coatPref = textureLod(uPrefilterMap, R, (1.0 - uClearcoatGloss) * 2.0).rgb;
+        specularIBL += coatPref * (0.04 * envBRDF.x + envBRDF.y) * clearcoat * 0.25;
+    }
+    if (transmission > 0.0) {
+        vec3 transIBL = texture(uIrradianceMap, -V).rgb * sqrt(max(albedo, vec3(0.0)));
+        diffuseIBL += transIBL * transmission * (1.0 - F) * 0.65;
+    }
+
+    vec3 ambient = (diffuseIBL + specularIBL) * uEnvIntensity * uIBLIntensity * ao;
+    return Lo + ambient;
+}
+
 vec3 shadeToon(vec3 albedo, float ao, vec3 N, vec3 V) {
     vec3 L = -normalize(uSunDirection);
     float NdotL = dot(N, L);
     float shadowTerm = sunShadow(N);
-    float lambert = NdotL * 0.5 + 0.5;  // half-lambert
+    float lambert = NdotL * 0.5 + 0.5;
     lambert = min(lambert, shadowTerm * 0.5 + 0.5);
 
-    // Two-tone ramp with soft transition (or sampled ramp texture)
     vec3 litColor = albedo;
     vec3 shadeColor = albedo * uShadowColor;
     float t = smoothstep(uShadowThreshold - uShadowSoftness,
@@ -180,18 +266,15 @@ vec3 shadeToon(vec3 albedo, float ao, vec3 N, vec3 V) {
     }
     color *= uSunColor / max(max(uSunColor.r, max(uSunColor.g, uSunColor.b)), 1e-3);
 
-    // Stylized specular (sharp lobe)
     vec3 H = normalize(V + L);
     float NdotH = max(dot(N, H), 0.0);
     float spec = smoothstep(1.0 - uToonSpecSize, 1.0 - uToonSpecSize + 0.02, NdotH);
     color += uToonSpecColor * spec * uToonSpecIntensity * t;
 
-    // Fresnel rim light, biased towards the lit side
     float rim = pow(1.0 - max(dot(N, V), 0.0), 1.0 / max(uRimWidth, 1e-3));
     float rimMask = smoothstep(0.0, 0.4, NdotL * 0.5 + 0.5);
     color += uRimColor * rim * uRimIntensity * rimMask;
 
-    // Point lights: simple stylized additive contribution
     for (int i = 0; i < uNumPointLights; ++i) {
         vec3 toLight = uPointLights[i].position - fs.worldPos;
         float dist = length(toLight);
@@ -202,7 +285,6 @@ vec3 shadeToon(vec3 albedo, float ao, vec3 N, vec3 V) {
                  pointAttenuation(dist, uPointLights[i].radius) * nl * 0.35;
     }
 
-    // A touch of ambient from the IBL irradiance to sit in the scene
     color += texture(uIrradianceMap, N).rgb * albedo * 0.15 * uEnvIntensity * uIBLIntensity;
     return color * ao;
 }
@@ -224,15 +306,22 @@ void main() {
     if (!gl_FrontFacing) N = -N;
     vec3 V = normalize(uCameraPos - fs.worldPos);
 
-    vec3 color = uShadingModel == 1 ? shadeToon(albedo, ao, N, V)
-                                    : shadePBR(albedo, metallic, roughness, ao, N, V);
+    vec3 color;
+    if (uShadingModel == 1)
+        color = shadeToon(albedo, ao, N, V);
+    else if (uShadingModel >= 2)
+        color = shadePrincipled(albedo, metallic, roughness, ao, N, V);
+    else
+        color = shadePBR(albedo, metallic, roughness, ao, N, V);
 
     vec3 emissive = uHasEmissiveMap == 1 ? texture(uEmissiveMap, fs.uv).rgb * uEmissive
                                          : uEmissive;
     color += emissive;
 
-    // Alpha only matters in the blended transparent pass; the opaque pass
-    // renders with blending disabled and ignores it.
     float alpha = clamp(uOpacity * albedoTex.a, 0.0, 1.0);
+    if (uShadingModel == 6 && uOpacity < 0.999) {
+        float fres = prin_SchlickWeight(max(dot(N, V), 0.0));
+        alpha = clamp(mix(uOpacity, 1.0, fres) * albedoTex.a, 0.0, 1.0);
+    }
     FragColor = vec4(color, alpha);
 }

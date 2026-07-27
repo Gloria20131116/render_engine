@@ -46,35 +46,64 @@ const std::vector<PresetEntry>& registry() {
         {"Glass (Approx)",
          [] {
              Material m = base("Glass (Approx)");
+             m.model = ShadingModel::Glass;
              m.baseColor = {0.9f, 0.95f, 1.0f};
              m.metallic = 0.0f;
              m.roughness = 0.03f;
-             m.specularF0 = 0.08f;  // higher IOR than default dielectric
+             m.specular = 0.5f;
+             m.ior = 1.5f;
+             m.transmission = 0.9f;
+             m.clearcoat = 0.2f;
+             m.clearcoatGloss = 1.0f;
              m.iblIntensity = 1.5f;
              m.doubleSided = true;
              m.blend = BlendMode::Transparent;
-             m.opacity = 0.35f;
+             m.opacity = 0.25f;
              return m;
          }},
         {"Skin (SSS Approx)",
          [] {
              Material m = base("Skin (SSS Approx)");
+             m.model = ShadingModel::Subsurface;
              m.baseColor = {0.87f, 0.68f, 0.58f};
              m.metallic = 0.0f;
              m.roughness = 0.55f;
-             m.specularF0 = 0.028f;  // skin F0 ~0.028
-             // Warm shadow tint fakes light bleeding through skin.
-             m.shadowColor = {0.85f, 0.52f, 0.46f};
+             m.specular = 0.35f;
+             m.subsurface = 0.75f;
+             m.ior = 1.4f;
              return m;
          }},
         {"Cloth",
          [] {
              Material m = base("Cloth");
-             m.baseColor = {0.55f, 0.55f, 0.6f};
+             m.model = ShadingModel::Cloth;
+             m.baseColor = {0.55f, 0.35f, 0.55f};
              m.metallic = 0.0f;
-             m.roughness = 0.92f;
-             m.specularF0 = 0.02f;
-             m.energyCompensation = 1.15f;  // fake sheen: boost grazing response
+             m.roughness = 0.85f;
+             m.sheen = 0.85f;
+             m.sheenTint = 0.7f;
+             m.specular = 0.2f;
+             return m;
+         }},
+        {"Principled Default",
+         [] {
+             Material m = base("Principled Default");
+             m.model = ShadingModel::Principled;
+             m.baseColor = {0.8f, 0.8f, 0.8f};
+             m.roughness = 0.4f;
+             m.specular = 0.5f;
+             return m;
+         }},
+        {"Clearcoat Car Paint",
+         [] {
+             Material m = base("Clearcoat Car Paint");
+             m.model = ShadingModel::Clearcoat;
+             m.baseColor = {0.15f, 0.25f, 0.75f};
+             m.metallic = 0.2f;
+             m.roughness = 0.35f;
+             m.clearcoat = 1.0f;
+             m.clearcoatGloss = 1.0f;
+             m.specular = 0.5f;
              return m;
          }},
         {"Emissive",
